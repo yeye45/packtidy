@@ -1,0 +1,138 @@
+"""Shared lexical path, marker and reparse rules (Python 3.9+)."""
+import csv
+import io
+import os
+from pathlib import Path
+import stat
+
+BLOCKING_KINDS = {'SECRET', 'FOREIGN', 'WORKSPACE', 'NO_TOUCH', 'ASK'}
+KINDS = BLOCKING_KINDS | {'NOTE'}
+PROTECTED_NAMES = {
+    'steamlibrary', 'steamapps', 'games', 'my games', 'epic games', 'battle.net',
+    'shaderpacks', 'appdata', 'program files', 'program files (x86)', 'windows',
+    'system volume information', '$recycle.bin', '.git', 'node_modules', '.venv',
+    '__pycache__', '_organize',
+}
+
+
+class SafetyError(ValueError):
+    pass
+
+
+def normal(path):
+    """Canonical separators/case are compared with key(); never resolve a link."""
+    value = os.path.normpath(os.path.abspath(os.fspath(path)))
+    if os.name == 'nt':
+        if value.startswith(('\\\\?\\', '\\\\.\\')):
+            raise SafetyError('不支持设备路径或扩展路径别名')
+        drive, tail = os.path.splitdrive(value)
+        if ':' in tail:
+            raise SafetyError('不支持备用数据流路径')
+        # Win32 treats trailing dots/spaces as aliases for the ordinary name.
+        tail = os.sep.join(part.rstrip(' .') for part in tail.split(os.sep))
+        value = drive + tail
+        # Expand NTFS 8.3 aliases without following a junction as realpath would.
+        # For new destinations expand their nearest existing ancestor.
+        current, missing = value, []
+        while not os.path.lexists(current):
+            parent, leaf = os.path.split(current)
+            if parent == current or not leaf:
+                break
+            missing.append(leaf)
+            current = parent
+        if os.path.lexists(current):
+            import ctypes
+            function = ctypes.windll.kernel32.GetLongPathNameW
+            function.argtypes = (ctypes.c_wchar_p,ctypes.c_wchar_p,ctypes.c_uint32)
+            function.restype = ctypes.c_uint32
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = function(current,buffer,len(buffer))
+            if not length or length >= len(buffer):
+                raise SafetyError('无法规范化 Windows 路径别名')
+            value = os.path.join(buffer.value,*reversed(missing)) if missing else buffer.value
+    return value
+
+
+def key(path):
+    return os.path.normcase(normal(path))
+
+
+def within(path, parent, inclusive=True):
+    p, root = key(path), key(parent)
+    try:
+        return os.path.commonpath([p, root]) == root and (inclusive or p != root)
+    except ValueError:
+        return False
+
+
+def is_reparse(path):
+    st = os.lstat(path)
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, 'st_file_attributes', 0) & 0x400)
+
+
+def assert_no_links(path):
+    """Check all existing ancestors too, including a junction used as Root."""
+    current = Path(normal(path))
+    while True:
+        if os.path.lexists(current) and is_reparse(current):
+            raise SafetyError('链接或重解析路径已拒绝')
+        if current.parent == current:
+            break
+        current = current.parent
+
+
+def read_tsv(path, fields):
+    if not os.path.exists(path):
+        return []
+    assert_no_links(path)
+    with open(path, encoding='utf-8-sig', newline='') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        if reader.fieldnames != list(fields):
+            raise SafetyError('TSV 表头不符合约定: ' + str(path))
+        rows = []
+        for row in reader:
+            if None in row or any(value is None for value in row.values()):
+                raise SafetyError('TSV 行列数不符合约定: ' + str(path))
+            rows.append(row)
+        return rows
+
+
+MARKER_FIELDS = ('path', 'kind', 'by', 'note', 'ts')
+
+
+def load_markers(root):
+    rows = read_tsv(Path(root)/'_organize/markers.tsv', MARKER_FIELDS)
+    for row in rows:
+        if row['kind'] not in KINDS or not os.path.isabs(row['path']):
+            raise SafetyError('保护标记格式错误，停止操作')
+        row['path'] = normal(row['path'])
+    return rows
+
+
+def marker_hits(path, markers, descendants=False):
+    return [m for m in markers if within(path, m['path']) or
+            (descendants and within(m['path'], path))]
+
+
+def block_kind(path, markers, descendants=False):
+    kinds = {m['kind'] for m in marker_hits(path, markers, descendants)}
+    # A NOTE may add information but can never revoke protection.
+    for kind in ('SECRET', 'FOREIGN', 'WORKSPACE', 'NO_TOUCH', 'ASK'):
+        if kind in kinds:
+            return kind
+    return None
+
+
+def encode_tsv(rows, fields):
+    out = io.StringIO(newline='')
+    writer = csv.DictWriter(out, fields, delimiter='\t', lineterminator='\n')
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue().encode('utf-8')
+
+
+def replace_path(value, old, new):
+    if not isinstance(value, str) or not os.path.isabs(value) or not within(value, old):
+        return value
+    rel = os.path.relpath(normal(value), normal(old))
+    return normal(new) if rel == '.' else os.path.join(normal(new), rel)

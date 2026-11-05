@@ -1,0 +1,29 @@
+{
+  "_comment": "自动批准策略。plan 子命令读这个决定哪些动作不用问人。",
+  "_version": 2,
+
+  "auto_approve": {
+    "rename": true,
+    "merge_to_known_zone": true,
+    "zones": [],
+    "_zones_note": "填你信任的顶层区名，只写区名不写路径。空数组 = 所有跨目录移动都需人工批。",
+    "max_gb": 400
+  },
+
+  "_hard_rules": {
+    "delete": "policy 里没有删除开关。删除永远需要人确认。",
+    "split": "split 永不自动生成——必须先经 S2 清点和 S3 归组。"
+  },
+
+  "_blocking_kinds": {
+    "SECRET": "凭据或他人隐私，不移动不记录",
+    "FOREIGN": "他人资产，从整理视野完全消失",
+    "WORKSPACE": "未整理完的工作区，跳过",
+    "NO_TOUCH": "明确不需要整理",
+    "ASK": "待用户回答"
+  },
+
+  "_dangerous": {
+    "csam": "遇到疑似涉及未成年人的性内容：停止该路径的一切操作，只报告路径"
+  }
+}

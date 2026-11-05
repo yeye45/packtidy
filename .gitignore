@@ -1,0 +1,34 @@
+# 运行产物，绝不提交
+
+# 探针结果含完整路径和文件名，可能含隐私
+_organize/
+probe/
+units_*.json
+group_*.json
+dup_scan.json
+
+# 日志与标记
+*.tsv
+!policy.example.json
+journal.tsv
+markers.tsv
+moves.log
+
+# 报告
+report/
+
+# 用户实际配置（用 policy.example.json 代替）
+policy.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.organizer-test-*/
+venv/
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
