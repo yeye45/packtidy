@@ -790,7 +790,7 @@ def render_html(root, data):
         '<!DOCTYPE html>\n<html lang="zh-CN" data-theme="ink"><head>'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
-        '<title>file-organizer</title>\n<style>'
+        '<title>packtidy</title>\n<style>'
         + CSS + '</style></head><body>'
         + BODY.replace('__ROOT__', root)
         + '<script>'

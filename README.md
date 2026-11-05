@@ -1,4 +1,12 @@
-# file-organizer
+# packtidy
+
+**顺着结构切分，而不是按扩展名硬套。**
+
+传统整理工具把 `.jpg` 归图片、`.exe` 归程序——这会把一个 Unity 游戏的
+可执行体、依赖库和数据目录拆到三个地方，游戏当场失效。
+
+packtidy 换一种做法：先判断「这些文件是不是一个不可分割的整体」，
+找到本来就存在的边界，再决定怎么归类。拿不准就报出来，不猜。
 
 分阶段的文件整理 skill，**只用于划分和归并最小单元**，不负责"整理好看"。
 
@@ -51,7 +59,7 @@ S6  覆盖检查  确认没有节点被跳过
 ## 安装
 
 ```bash
-git clone <repo> file-organizer
+git clone <repo> packtidy
 ```
 
 **Windows**：PowerShell 5.1+ 和 Python 3.9+。

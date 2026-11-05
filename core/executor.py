@@ -188,7 +188,7 @@ class Journal:
         local = os.environ.get('LOCALAPPDATA')
         if not local:
             local = os.environ.get('XDG_STATE_HOME') or str(Path.home()/'.local/state')
-        self.mirror_dir = Path(local)/'file-organizer-mirror'/token
+        self.mirror_dir = Path(local)/'packtidy-mirror'/token
         self.mirror = self.mirror_dir/'journal.tsv'
         self.tx_dir = self.root/'_organize/transactions'
 
