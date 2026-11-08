@@ -72,47 +72,83 @@ PowerShell 脚本使用 UTF-8 BOM，兼容 Windows PowerShell 5.1 和 PowerShell
 
 ## 快速开始
 
+统一入口 `packtidy.py`，七个子命令对应六个阶段：
+
 ```bash
-# 1. 检查一级目录及已发现的嵌套节点是否完成各阶段（只读）
-python core/coverage.py /mnt/disk --probe /mnt/disk/_organize/probe
+# 看盘上一级目录有什么（零成本，只读）
+python packtidy.py coverage /mnt/disk
 
-# 2. 采集某个目录的信号（只读）
-python core/signals.py /mnt/disk/some-dir --json
+# 采集某个目录的信号（只读，输出事实）
+python packtidy.py scan /mnt/disk/some-dir --json
 
-# 3. 读判据，决定这个目录有几个单元
-#    见 references/judgment.md
+# 从探针结果生成待批清单
+python packtidy.py plan /mnt/disk --dry-run
+
+# 生成决策界面（浏览器打开）
+python packtidy.py ui /mnt/disk --open
+
+# 执行 / 撤销 / 中断恢复
+python packtidy.py apply /mnt/disk --actions plan.tsv --dry-run
+python packtidy.py undo --journal /mnt/disk/_organize/journal.tsv --last --dry-run
+python packtidy.py recover /mnt/disk
 ```
 
-完整流程需要 AI 代理参与探针任务（`references/probe-task.md` 等）。
+也可以直接用模块：`python core/signals.py <dir> --json`
 
-审批完成后，使用四列 TSV 动作表执行。`move` 的 dst 是目录，`rename` 的 dst 是新文件名，`mkdir` 的 dst 是绝对路径：
+**注意**：`plan` 和 `ui` 读取 `_organize/probe/*.json`——那些文件由 AI 代理执行
+`references/probe-task.md` 等任务时产出。没有探针结果时，这两个命令会报「没有归组结果」。
 
-```text
+## 一个完整的例子
+
+```bash
+# 1. 先看有没有遗漏（每次阶段结束都该跑）
+python packtidy.py coverage /mnt/disk
+#   → 列出哪些节点没有探针、哪些没清点、哪些没归组
+
+# 2. 看某个目录到底是什么
+python packtidy.py scan /mnt/disk/新建文件夹
+#   → [结构绑定] Unity 布局 exe + _data/
+#   → [到达聚集] 73% 同秒 (2025-01-24 18:18:28)
+#   → [构成] 6 文件 / 1 目录 / 2 种类型
+
+# 3. 生成界面，默认值已填好，只改标黄的几项
+python packtidy.py ui /mnt/disk --open
+
+# 4. 先预演，再执行
+python packtidy.py apply /mnt/disk --actions plan.tsv --dry-run
+python packtidy.py apply /mnt/disk --actions plan.tsv
+
+# 5. 不满意就撤
+python packtidy.py undo --journal /mnt/disk/_organize/journal.tsv --last
+```
+
+## 动作表格式
+
+审批完成后用四列 TSV 执行。`move` 的 dst 是目录，`rename` 的 dst 是新文件名，
+`mkdir` 的 dst 是绝对路径（各列必须用制表符分隔）：
+
+```
 op      src                     dst                     reason
-move    G:\下载\课程            G:\学习                 用户已批准
-rename  G:\新建文件夹            照片备份                已确认内容
+move    /mnt/disk/下载/课程      /mnt/disk/学习           用户已批准
+rename  /mnt/disk/新建文件夹     照片备份                 已确认内容
+mkdir   -                       /mnt/disk/归档           下载暂存区拆分
 ```
 
-上面的空白分隔仅用于展示，保存时各列必须使用制表符。实际执行入口：
+也支持 PowerShell 封装：
 
 ```powershell
-pwsh -File scripts/apply.ps1 -Root G:\ -Actions G:\_organize\actions.tsv -DryRun
-pwsh -File scripts/apply.ps1 -Root G:\ -Actions G:\_organize\actions.tsv
-pwsh -File scripts/undo.ps1 -Journal G:\_organize\journal.tsv -Last -DryRun
-# 中断或日志故障：先恢复，再继续执行/撤销
+pwsh -File scripts/apply.ps1 -Root G:\ -Actions actions.tsv -DryRun
+pwsh -File scripts/undo.ps1 -Journal journal.tsv -Last -DryRun
 pwsh -File scripts/recover.ps1 -Root G:\
 ```
 
-也可以直接运行 `python core/executor.py apply --root G:\ --actions <动作表> --dry-run`。
-`-Plan` 保留 rename/merge 兼容入口；split 必须先按最小单元归组并生成动作表，不再按扩展名自动拆分。
-`-DryRun` 不创建状态目录或日志；被拦截/失败的操作返回非零退出码。
-
-`policy.example.json` 供 AI 审批阶段读取，实际配置保存为 `policy.json`。策略、空间限制和 placement 审批由调用方核对；执行器不把任意动作表视为经过策略验证的证据。
-执行器独立强制根目录、保护标记、禁止链接/跨卷、每批 1–200 项及不覆盖等规则。
+**`split` 不会自动展开**——必须先按最小单元归组、生成明确的动作表。
+理由见 `references/judgment.md`：按扩展名拆分必然拆散引擎资源。
 
 ## 目录结构
 
 ```
+packtidy.py                 统一入口（scan/coverage/plan/apply/undo/recover/ui）
 SKILL.md                    流程与规则
 policy.example.json         自动批准策略示例（复制为 policy.json 后按你的盘改）
 core/
@@ -120,6 +156,8 @@ core/
   safety.py                 路径、保护标记及链接检查
   signals.py                可代码化的判据 → 输出事实 JSON
   coverage.py               覆盖检查：有没有节点被跳过
+  decisions.py              S4 建议：每组该去哪，含新建分类的归属规划
+  ui.py                     生成决策界面（单文件 HTML，跟随系统主题）
 references/
   probe-task.md             S1 判定任务
   unit-inventory.md         S2 清点任务
@@ -133,6 +171,7 @@ scripts/
   journal.ps1               日志
   markers.ps1               标记（FOREIGN/WORKSPACE/SECRET…）
   peek_archive.py           读压缩包条目表（不解压）
+  export-feedback.py        本地生成脱敏摘要（不联网、不上传）
 ```
 
 ## 安全设计

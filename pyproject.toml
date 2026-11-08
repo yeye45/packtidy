@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "packtidy"
+version = "0.1.0"
+description = "顺着结构切分，而不是按扩展名硬套——分阶段的文件整理工具"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "yeye45" }]
+keywords = ["file-organizer", "deduplication", "archive", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Filesystems",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/yeye45/packtidy"
+Issues = "https://github.com/yeye45/packtidy/issues"
+
+[project.scripts]
+packtidy = "packtidy:main"
+
+[project.optional-dependencies]
+# 读压缩包条目表用；不装也能跑，只是 peek_archive 的 RAR/7z 支持受限
+archives = ["rarfile>=4.0", "py7zr>=1.0"]
+
+[tool.setuptools]
+py-modules = ["packtidy"]
