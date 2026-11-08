@@ -7,11 +7,21 @@ import stat
 
 BLOCKING_KINDS = {'SECRET', 'FOREIGN', 'WORKSPACE', 'NO_TOUCH', 'ASK'}
 KINDS = BLOCKING_KINDS | {'NOTE'}
+# 命中即拒绝移动父目录的名字。
+#
+# 判断标准：移动父目录会不会真的破坏它？
+#   venv / node_modules  含绝对路径依赖，移了要重建 → 保护
+#   .git                 含工作树索引，移了可能损坏 → 保护
+#   program files 等     系统目录，不该动 → 保护
+#
+# __pycache__ 不在此列：它是 Python 的编译缓存，自动生成、可随时删，
+# 移动父目录不影响正确性（最多重新编译一次）。把它当保护项会让几乎所有
+# 含 Python 代码的目录都无法整理。
 PROTECTED_NAMES = {
     'steamlibrary', 'steamapps', 'games', 'my games', 'epic games', 'battle.net',
     'shaderpacks', 'appdata', 'program files', 'program files (x86)', 'windows',
     'system volume information', '$recycle.bin', '.git', 'node_modules', '.venv',
-    '__pycache__', '_organize',
+    'site-packages', '_organize',
 }
 
 
