@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 不确定是不是问题？先看 README
+    url: https://github.com/yeye45/packtidy#readme
+    about: 使用边界、常见问题，以及它本来就不做什么
