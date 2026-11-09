@@ -466,6 +466,101 @@ def _common_prefix(names):
     return prefix
 
 
+# ═══════════════════════════════════════════════════════════
+# AI 判断环节：代码做不了的语义决策
+#
+# 代码能算扩展名分布、能提词根、能匹配规则包，
+# 但"这个组到底是什么东西""该叫什么名字"必须由 AI 判断。
+# 这里只负责把需要 AI 判断的挑出来，并把事实准备齐。
+# ═══════════════════════════════════════════════════════════
+
+# 什么情况必须交给 AI
+AI_TRIGGERS = {
+    "no_rule_match":   "规则包匹配不上",
+    "shape_conflict":  "内容形态与目标类别冲突",
+    "need_naming":     "候选类别需要命名",
+    "cross_bucket":    "同系列跨桶",
+}
+
+
+def needs_ai(suggest, shape=None):
+    """这一组的建议，需不需要 AI 来判断？
+
+    返回 None 表示代码已能定论；否则返回触发原因。
+    """
+    if suggest.get("needsCheck"):
+        # needsCheck 为真就是代码对结论没把握，必须交人/AI
+        # 有 evidence 说明是形态与名字的矛盾
+        if suggest.get("evidence"):
+            return "shape_conflict"
+        return "need_naming"
+
+    if suggest["mode"] == "keep":
+        if shape and shape.get("kind") not in (None, "mixed", "empty"):
+            # 形态明确但没定去向 → 需要判断这是什么
+            return "no_rule_match"
+        return None
+
+    if suggest["mode"] == "new" and suggest.get("needsCheck"):
+        return "need_naming"
+
+    return None
+
+
+def build_ai_question(group_name, node_name, node_path, suggest,
+                      shape=None, sample_files=None, trigger=None):
+    """构造一个 AI 判断请求。只放事实，不放判断。"""
+    return {
+        "group": group_name,
+        "parent": node_name,
+        "path": node_path,
+        "shape": shape or {},
+        "sampleFiles": (sample_files or [])[:8],
+        "suggestion": {
+            "mode": suggest.get("mode"),
+            "target": suggest.get("targetLabel") or suggest.get("newName"),
+            "reason": suggest.get("reason"),
+            "evidence": suggest.get("evidence") or [],
+        },
+        "question": _ai_question_text(suggest, shape, trigger),
+    }
+
+
+def _ai_question_text(suggest, shape=None, trigger=None):
+    if trigger == "need_naming":
+        target = (suggest.get("target") or suggest.get("newName")
+                  or suggest.get("targetLabel") or "这个类别")
+        return (f"建议新建「{target}」，但这个名字合适吗？"
+                f"或者该并进已有的某一类？")
+    if trigger == "shape_conflict":
+        return ("名字指向的类别和文件内容对不上。"
+                "该信内容还是名字？内容是对的，该归到哪一类？")
+    if trigger == "no_rule_match":
+        kind = (shape or {}).get("kind", "未知")
+        return (f"规则包中没有匹配项，但内容是 {kind}。"
+                f"这些是什么？该归到哪一类？")
+    if suggest.get("mode") == "keep":
+        return "这些文件是什么？该归到哪一类？还是保持原位？"
+    if suggest.get("needsCheck"):
+        return "这个归类对吗？不确定的话该归到哪？"
+    return "这个归类对吗？不确定的话该归到哪？"
+
+
+def sample_file_names(path, limit=8):
+    """取几个文件名作为样例——只要名字，不读内容。"""
+    import os as _os
+    out = []
+    try:
+        for dp, dn, fn in _os.walk(path):
+            for f in sorted(fn):
+                out.append(f)
+                if len(out) >= limit:
+                    return out
+    except OSError:
+        pass
+    return out
+
+
 # 内容形态 → 该去哪个语义类别（优先级高于名字匹配）
 SHAPE_TO_CATEGORY = {
     "media":     "media_pending",      # 需要按名字细分（视频/音乐）
@@ -626,12 +721,83 @@ def is_category_node(name):
     return any(low == c.casefold() for c in CATEGORY_NODE_NAMES)
 
 
+def apply_answers(nodes, answers_path):
+    """把 AI 子代理的判断回填到建议里。
+
+    答案格式：
+      {"answers": [{"group": "...", "parent": "...",
+                    "category": "...", "label": "...",
+                    "confidence": "high|medium|low",
+                    "evidence": "..."}]}
+
+    按 (parent, group) 匹配。找不到对应组的答案忽略并报告。
+    """
+    import json as _json
+    from pathlib import Path as _P
+
+    try:
+        raw = _P(answers_path).read_text(encoding="utf-8-sig")
+        payload = _json.loads(raw)
+    except (OSError, ValueError) as exc:
+        print(f"答案文件无法读取: {type(exc).__name__}", file=sys.stderr)
+        return 0, 0
+
+    items = payload.get("answers") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        print("答案格式错误：需要 answers 数组", file=sys.stderr)
+        return 0, 0
+
+    # 建索引：(parent, group) → 组
+    index = {}
+    for n in nodes:
+        for g in n["groups"]:
+            index[(n["name"], g["name"])] = g
+
+    applied = missed = 0
+    for a in items:
+        if not isinstance(a, dict):
+            continue
+        key = (a.get("parent"), a.get("group"))
+        g = index.get(key)
+        if not g:
+            missed += 1
+            continue
+        conf = str(a.get("confidence") or "medium").lower()
+        if conf not in ("high", "medium", "low"):
+            conf = "medium"
+        sg = g.setdefault("suggest", {})
+        # AI 判断覆盖原来的建议
+        cat = a.get("category")
+        label = a.get("label") or cat
+        if cat:
+            sg["mode"] = "new"
+            sg["newName"] = label
+            sg["newParent"] = None
+        sg["aiJudgement"] = {
+            "category": cat,
+            "label": label,
+            "confidence": conf,
+            "evidence": a.get("evidence") or "",
+        }
+        # high 置信度视为已定论，不再标待确认
+        if conf == "high":
+            sg["needsCheck"] = False
+        else:
+            sg["needsCheck"] = True
+        applied += 1
+
+    return applied, missed
+
+
 def main():
     _boot_rules()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--root', required=True)
     ap.add_argument('--probe')
     ap.add_argument('--out')
+    ap.add_argument('--need-ai', action='store_true',
+                    help='只输出需要 AI 判断的，附完整事实')
+    ap.add_argument('--answers', help='AI 判断结果 JSON，回填到建议里')
     args = ap.parse_args()
 
     root = os.path.abspath(args.root)
@@ -682,6 +848,49 @@ def main():
             if s["needsCheck"]:
                 need_check += 1
 
+    # ── AI 判断环节：挑出代码定不了的 ──
+    ai_questions = []
+    for n in nodes:
+        for g in n["groups"]:
+            sg = g["suggest"]
+            # 重新算一次形态（suggest 里已经算过，这里从 evidence 反推）
+            kind = None
+            for ev in (sg.get("evidence") or []):
+                for k in ("installer", "media", "image", "code",
+                          "document", "archive"):
+                    if k in ev:
+                        kind = k
+                        break
+                if kind:
+                    break
+            shape = {"kind": kind} if kind else None
+
+            why = needs_ai(sg, shape)
+            if not why:
+                continue
+            # 组路径：组名不一定是目录名，按单元列表逐个试
+            import os as _os
+            gp = None
+            cands = []
+            if n.get("path"):
+                cands.append(_os.path.join(n["path"], g["name"]))
+            # 组的 units 字段里可能是真实路径
+            for u in (g.get("units") or [])[:5]:
+                if isinstance(u, str):
+                    cands.append(u if _os.path.isabs(u)
+                                 else _os.path.join(n.get("path") or "", u))
+            for c in cands:
+                if c and _os.path.isdir(c):
+                    gp = c
+                    break
+            q = build_ai_question(g["name"], n["name"], n.get("path"),
+                                  sg, shape,
+                                  sample_file_names(gp) if gp else [],
+                                  trigger=why)
+            q["trigger"] = why
+            q["triggerText"] = AI_TRIGGERS.get(why, why)
+            ai_questions.append(q)
+
     # ── 第二遍：从未匹配上的组里发现新类别候选 ──
     proposals = propose_new_categories(unmatched)
     if proposals:
@@ -713,7 +922,21 @@ def main():
         },
         "newDirs": sorted(new_dirs.values(), key=lambda x: -x["count"]),
         "proposedCategories": proposal_out,
+        "aiQuestions": ai_questions,
     }
+
+    # --answers：回填 AI 判断
+    if args.answers:
+        applied, missed = apply_answers(nodes, args.answers)
+        print(f"回填 {applied} 组判断", file=sys.stderr)
+        if missed:
+            print(f"  {missed} 条没找到对应组（已忽略）", file=sys.stderr)
+
+    # --need-ai：只输出问题清单，方便喂给 AI
+    if args.need_ai:
+        print(json.dumps({"questions": data["aiQuestions"]},
+                         ensure_ascii=False, indent=2))
+        return 1 if data["aiQuestions"] else 0
 
     out = Path(args.out) if args.out else Path(root) / '_organize' / 'decisions.json'
     out.parent.mkdir(parents=True, exist_ok=True)

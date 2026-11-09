@@ -292,5 +292,115 @@ class TestIntegration(unittest.TestCase):
             self.assertEqual(props, {}, "单个孤件不该产生候选")
 
 
+
+
+class TestNeedsAI(unittest.TestCase):
+    """什么情况该交给 AI。"""
+
+    def test_keep_with_shape_needs_ai(self):
+        sug = {"mode": "keep", "reason": "无匹配",
+               "evidence": ["内容以 installer 为主（.exe 占 89%）"]}
+        self.assertEqual(D.needs_ai(sug, {"kind": "installer"}),
+                         "no_rule_match")
+
+    def test_keep_without_shape_no_ai(self):
+        sug = {"mode": "keep", "reason": "无特征", "evidence": []}
+        self.assertIsNone(D.needs_ai(sug, None))
+
+    def test_conflict_needs_ai(self):
+        sug = {"mode": "move", "needsCheck": True,
+               "evidence": ["内容以安装包为主，但目标类别是成品类"]}
+        self.assertEqual(D.needs_ai(sug, {"kind": "installer"}),
+                         "shape_conflict")
+
+    def test_new_with_check_needs_naming(self):
+        sug = {"mode": "new", "newName": "某类", "needsCheck": True,
+               "evidence": []}
+        self.assertEqual(D.needs_ai(sug, None), "need_naming")
+
+    def test_clean_move_no_ai(self):
+        sug = {"mode": "move", "target": "/x/影视", "needsCheck": False,
+               "evidence": []}
+        self.assertIsNone(D.needs_ai(sug, {"kind": "media"}))
+
+
+class TestBuildQuestion(unittest.TestCase):
+    def test_question_has_facts(self):
+        sug = {"mode": "keep", "reason": "无匹配",
+               "evidence": ["内容以 installer 为主"]}
+        q = D.build_ai_question("某组", "父目录", "/x", sug,
+                                {"kind": "installer"},
+                                ["a.exe", "b.exe"], trigger="no_rule_match")
+        self.assertEqual(q["group"], "某组")
+        self.assertEqual(q["parent"], "父目录")
+        self.assertEqual(q["shape"]["kind"], "installer")
+        self.assertEqual(q["sampleFiles"], ["a.exe", "b.exe"])
+        self.assertIn("installer", q["question"])
+
+    def test_need_naming_question_mentions_target(self):
+        sug = {"mode": "new", "newName": "电子书", "needsCheck": True}
+        q = D.build_ai_question("x", "y", "/p", sug, None, [],
+                                trigger="need_naming")
+        self.assertIn("电子书", q["question"])
+
+
+class TestApplyAnswers(unittest.TestCase):
+    def _nodes(self):
+        return [{
+            "name": "父A",
+            "groups": [
+                {"name": "组一", "suggest": {"mode": "keep", "needsCheck": True}},
+                {"name": "组二", "suggest": {"mode": "keep", "needsCheck": True}},
+            ],
+        }]
+
+    def test_applies_high_confidence(self):
+        import json, tempfile
+        nodes = self._nodes()
+        ans = {"answers": [{"parent": "父A", "group": "组一",
+                            "category": "study", "label": "学习资料",
+                            "confidence": "high", "evidence": "课程视频"}]}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            json.dump(ans, f, ensure_ascii=False)
+            path = f.name
+        applied, missed = D.apply_answers(nodes, path)
+        self.assertEqual(applied, 1)
+        self.assertEqual(missed, 0)
+        g = nodes[0]["groups"][0]
+        self.assertEqual(g["suggest"]["aiJudgement"]["label"], "学习资料")
+        self.assertFalse(g["suggest"]["needsCheck"])   # high → 不再待确认
+        os.unlink(path)
+
+    def test_low_confidence_stays_pending(self):
+        import json, tempfile
+        nodes = self._nodes()
+        ans = {"answers": [{"parent": "父A", "group": "组一",
+                            "category": "x", "label": "X",
+                            "confidence": "low"}]}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            json.dump(ans, f, ensure_ascii=False)
+            path = f.name
+        D.apply_answers(nodes, path)
+        self.assertTrue(nodes[0]["groups"][0]["suggest"]["needsCheck"])
+        os.unlink(path)
+
+    def test_unmatched_reported(self):
+        import json, tempfile
+        nodes = self._nodes()
+        ans = {"answers": [{"parent": "不存在的父", "group": "不存在的组",
+                            "category": "x", "label": "X",
+                            "confidence": "high"}]}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            json.dump(ans, f, ensure_ascii=False)
+            path = f.name
+        applied, missed = D.apply_answers(nodes, path)
+        self.assertEqual(applied, 0)
+        self.assertEqual(missed, 1)
+        os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
