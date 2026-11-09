@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 SYSTEM_DIRS = {
     '$recycle.bin', 'system volume information', 'recovery',
@@ -285,7 +287,33 @@ def is_category_node(name):
     return any(c.lower() == low for c in CATEGORY_NODE_NAMES)
 
 
+def _boot_rules():
+    """启动时加载规则包，覆盖模块级常量。
+
+    规则包是可选的——没有就沿用代码里的默认值。
+    加载失败不阻断，只在 stderr 提示。
+    """
+    try:
+        import rules as rules_mod
+        import safety as safety_mod
+    except ImportError:
+        return
+    try:
+        data = rules_mod.load()
+        if data.get("_missing"):
+            return
+        changed = rules_mod.apply_to(data, safety_mod=safety_mod,
+                                     decisions_mod=sys.modules[__name__])
+        if changed:
+            print(f"规则包 v{data.get('version')} 已生效: "
+                  f"{len(changed)} 组常量", file=sys.stderr)
+    except Exception as exc:
+        print(f"规则包加载失败，使用内置默认: {type(exc).__name__}",
+              file=sys.stderr)
+
+
 def main():
+    _boot_rules()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--root', required=True)
     ap.add_argument('--probe')

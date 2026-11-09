@@ -111,259 +111,233 @@ def collect_zones(root):
 
 
 CSS = r"""
-/* ── 双主题：跟随系统 + 手动覆盖 ── */
 :root{
-  --bg:#fbfcfd; --surface:#fff; --surface2:#f5f7fa; --hover:#eff3f8;
-  --line:#e3e8ef; --line2:#cfd6e0;
-  --fg:#111820; --fg2:#5a6572; --fg3:#8d98a6;
-  --accent:#2563c4; --accent-d:#1d4fa3; --accent-fg:#fff;
-  --ok:#157f52; --warn:#a86610; --err:#c23c46;
-  --new:#7c4dbd;
-  --r-sm:6px; --r:10px; --r-lg:16px;
-  --shadow:0 1px 3px rgba(16,32,64,.07),0 1px 2px rgba(16,32,64,.04);
-  --shadow-lg:0 24px 64px rgba(16,32,64,.18);
-  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --bg:#fbfcfd; --surface:#fff; --surface2:#f4f6f9; --hover:#eef2f7;
+  --line:#e2e8f0; --line2:#cbd5e1;
+  --fg:#0f172a; --fg2:#475569; --fg3:#94a3b8;
+  --accent:#2563eb; --accent-d:#1d4ed8; --accent-fg:#fff;
+  --ok:#059669; --warn:#d97706; --err:#dc2626;
+  --r:10px; --r-sm:6px;
   --mono:ui-monospace,"SF Mono",Consolas,monospace;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --bg:#0c0f13; --surface:#14181e; --surface2:#1a1f27; --hover:#212832;
-    --line:#242b35; --line2:#333c49;
-    --fg:#e8ecf2; --fg2:#9aa5b4; --fg3:#65707f;
-    --accent:#5a9ee6; --accent-d:#4085cc; --accent-fg:#08121e;
-    --ok:#4cb380; --warn:#d4a03c; --err:#e0707a;
-    --new:#a884e0;
-    --shadow:0 1px 2px rgba(0,0,0,.5);
-    --shadow-lg:0 24px 64px rgba(0,0,0,.65);
+    --bg:#0b0f14; --surface:#121821; --surface2:#1a2230; --hover:#212b3a;
+    --line:#243040; --line2:#334155;
+    --fg:#e2e8f0; --fg2:#94a3b8; --fg3:#64748b;
+    --accent:#3b82f6; --accent-d:#2563eb; --accent-fg:#fff;
+    --ok:#10b981; --warn:#f59e0b; --err:#ef4444;
   }
 }
 html[data-theme="dark"]{
-  --bg:#0c0f13; --surface:#14181e; --surface2:#1a1f27; --hover:#212832;
-  --line:#242b35; --line2:#333c49;
-  --fg:#e8ecf2; --fg2:#9aa5b4; --fg3:#65707f;
-  --accent:#5a9ee6; --accent-d:#4085cc; --accent-fg:#08121e;
-  --ok:#4cb380; --warn:#d4a03c; --err:#e0707a;
-  --new:#a884e0;
-  --shadow:0 1px 2px rgba(0,0,0,.5);
-  --shadow-lg:0 24px 64px rgba(0,0,0,.65);
+  --bg:#0b0f14; --surface:#121821; --surface2:#1a2230; --hover:#212b3a;
+  --line:#243040; --line2:#334155;
+  --fg:#e2e8f0; --fg2:#94a3b8; --fg3:#64748b;
+  --accent:#3b82f6; --accent-d:#2563eb; --accent-fg:#fff;
+  --ok:#10b981; --warn:#f59e0b; --err:#ef4444;
 }
-
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%}
 body{
-  font:14.5px/1.6 var(--font); background:var(--bg); color:var(--fg);
-  -webkit-font-smoothing:antialiased;
-  display:flex; flex-direction:column; overflow:hidden;
-  transition:background .18s,color .18s;
+  font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;overflow:hidden;
 }
-b,strong,h1,h2{font-weight:600}
-code,.mono{font-family:var(--mono)}
+code,.mono,.num{font-family:var(--mono)}
 ::selection{background:var(--accent);color:var(--accent-fg)}
-::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-thumb{background:var(--line2);border-radius:5px;
-  border:3px solid var(--bg)}
 
-/* ── 顶栏 ── */
 .top{
-  flex:0 0 auto; display:flex; align-items:center; gap:12px;
-  padding:12px 24px; background:var(--surface);
-  border-bottom:1px solid var(--line);
+  flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:11px 20px;
+  background:var(--surface);border-bottom:1px solid var(--line);
 }
-.logo{font-weight:600;font-size:14.5px}
-.logo em{font-style:normal;font-weight:400;font-size:11.5px;
-  color:var(--fg3);font-family:var(--mono);margin-left:8px}
+.logo{font-weight:600;font-size:14px}
+.logo em{font-style:normal;font-size:11px;color:var(--fg3);
+  font-family:var(--mono);margin-left:8px}
 .grow{flex:1}
-.tbtn{
-  width:32px;height:32px;border-radius:8px;border:1px solid var(--line);
-  background:transparent;color:var(--fg2);cursor:pointer;font-size:14px;
-  display:flex;align-items:center;justify-content:center;transition:.14s;
-}
-.tbtn:hover{background:var(--hover);color:var(--fg)}
+.tbtn{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);
+  background:transparent;color:var(--fg2);cursor:pointer;font-size:12px;
+  display:flex;align-items:center;justify-content:center}
+.tbtn:hover{background:var(--hover)}
 
-/* ── 视觉核心 ── */
 .core{
-  flex:0 0 auto; padding:34px 24px 26px; text-align:center;
-  background:var(--surface); border-bottom:1px solid var(--line);
+  flex:0 0 auto;padding:22px 20px 18px;text-align:center;
+  background:var(--surface);border-bottom:1px solid var(--line);
 }
-.core .num{
-  font-size:68px; font-weight:700; line-height:1; letter-spacing:-.045em;
-  font-variant-numeric:tabular-nums; font-family:var(--mono);
-  color:var(--accent); display:block; margin-bottom:8px;
+.core .n{
+  font-size:48px;font-weight:700;line-height:1;letter-spacing:-.04em;
+  font-family:var(--mono);color:var(--warn);display:block;margin-bottom:6px;
 }
-.core .num.zero{color:var(--ok)}
-.core .lbl{font-size:16.5px;font-weight:600;margin-bottom:8px}
-.core .sub{
-  font-size:13.5px;color:var(--fg3);max-width:580px;margin:0 auto;
-  line-height:1.75;
-}
-.core .sub b{color:var(--fg2);font-weight:600}
-.core .cta{
-  display:flex;gap:10px;justify-content:center;margin-top:20px;flex-wrap:wrap;
-}
+.core .n.zero{color:var(--ok)}
+.core .lbl{font-size:14px;font-weight:600;margin-bottom:6px}
+.core .sub{font-size:12.5px;color:var(--fg3);max-width:480px;margin:0 auto;line-height:1.65}
+.core .sub b{color:var(--fg2)}
+.core .cta{display:flex;gap:8px;justify-content:center;margin-top:14px}
 
-/* ── 内容 ── */
 .stage{flex:1;overflow-y:auto;min-height:0}
-.wrap{max-width:1000px;margin:0 auto;padding:20px 24px 60px}
+.wrap{max-width:880px;margin:0 auto;padding:16px 18px 40px}
 
-.node{
-  background:var(--surface); border:1px solid var(--line);
-  border-radius:var(--r-lg); margin-bottom:10px; overflow:hidden;
-  box-shadow:var(--shadow);
+.needcard{
+  background:var(--surface);
+  border:1px solid color-mix(in srgb,var(--warn) 40%,var(--line));
+  border-radius:var(--r);overflow:hidden;margin-bottom:14px;
+  box-shadow:0 1px 3px rgba(217,119,6,.08);
 }
-.node-hd{
-  display:flex;align-items:center;gap:11px;padding:12px 16px;
-  cursor:pointer;user-select:none;transition:background .12s;
+.needcard .hd{
+  padding:10px 16px;background:color-mix(in srgb,var(--warn) 8%,var(--surface));
+  border-bottom:1px solid color-mix(in srgb,var(--warn) 25%,var(--line));
+  font-size:12px;font-weight:600;color:var(--warn);
 }
-.node-hd:hover{background:var(--hover)}
-.node-hd .dot{
-  width:7px;height:7px;border-radius:50%;flex:0 0 7px;
-  background:var(--line2);transition:.2s;
+.needitem{
+  display:grid;grid-template-columns:1fr 230px;gap:14px;align-items:center;
+  padding:13px 16px;border-bottom:1px solid var(--line);
 }
-.node.attn .node-hd .dot{
-  background:var(--warn);
-  box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 20%,transparent);
-}
-.node-hd .t{flex:1;min-width:0}
-.node-hd .t b{font-size:13.5px}
-.node-hd .t span{
-  font-size:11.5px;color:var(--fg3);margin-left:8px;font-family:var(--mono);
-}
-.node-hd .tag{
-  font-size:11px;padding:2px 8px;border-radius:9px;font-weight:600;
-  white-space:nowrap;
-}
-.node-hd .tag.warn{
-  background:color-mix(in srgb,var(--warn) 15%,transparent);color:var(--warn);
-}
-.node-hd .tag.ok{color:var(--fg3);font-weight:400}
-.node-hd .chev{color:var(--fg3);font-size:11px;transition:transform .16s}
-.node.open .chev{transform:rotate(90deg)}
-.node-bd{display:none;border-top:1px solid var(--line)}
-.node.open .node-bd{display:block}
+.needitem:last-child{border-bottom:0}
+.needitem .nm{font-size:13px;font-weight:600;margin-bottom:3px}
+.needitem .ds{font-size:12px;color:var(--fg2);line-height:1.55}
+.needitem .ds em{font-style:normal;color:var(--accent);font-weight:500;
+  display:block;margin-top:4px}
 
-/* ── 组行 ── */
-.grp{
-  display:grid; grid-template-columns:1fr 280px; gap:14px;
-  align-items:start; padding:11px 16px;
-  border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);
+.fold{
+  background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);margin-bottom:10px;overflow:hidden;
 }
-.grp:last-child{border-bottom:0}
-.grp:hover{background:var(--hover)}
-.grp.attn{background:color-mix(in srgb,var(--warn) 4%,transparent)}
-.grp .bd{min-width:0;padding-top:2px}
-.grp .nm{
-  font-size:13px;font-weight:500;display:flex;align-items:center;
-  gap:7px;flex-wrap:wrap;
+.fold-hd{
+  display:flex;align-items:center;gap:10px;padding:11px 16px;
+  cursor:pointer;user-select:none;
 }
-.grp .nm .rel{
-  font-size:9.5px;padding:1px 6px;border-radius:7px;
-  background:var(--surface2);color:var(--fg3);font-family:var(--mono);
-  font-weight:400;
-}
-.grp .meta{font-size:11.5px;color:var(--fg3);margin-top:3px;line-height:1.55}
+.fold-hd:hover{background:var(--hover)}
+.fold-hd .t{flex:1;font-size:13px;font-weight:500}
+.fold-hd .c{font-size:11.5px;color:var(--fg3);font-family:var(--mono)}
+.fold-hd .chev{color:var(--fg3);font-size:10px;transition:transform .15s}
+.fold.open .chev{transform:rotate(90deg)}
+.fold-bd{display:none;border-top:1px solid var(--line)}
+.fold.open .fold-bd{display:block}
 
-/* ── 目标选择器 ── */
-.tgt{display:flex;flex-direction:column;gap:5px}
-.tgt .row{display:flex;gap:5px}
-select.z{
-  flex:1;min-width:0;padding:7px 10px;border-radius:var(--r-sm);
-  background:var(--surface2);border:1px solid var(--line);color:var(--fg2);
-  font:12.5px var(--font);cursor:pointer;outline:none;transition:.14s;
+.row{
+  display:flex;align-items:center;gap:12px;padding:8px 16px;
+  border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);
+  font-size:12.5px;
 }
-select.z:focus{border-color:var(--accent)}
-select.z.keep{color:var(--fg3)}
-select.z.move{
-  color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line));
-  background:color-mix(in srgb,var(--accent) 7%,var(--surface2));
+.row:last-child{border-bottom:0}
+.row .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .n .k{color:var(--fg3);font-size:11px;margin-left:6px}
+.row .t{
+  flex:0 0 auto;font-size:11.5px;color:var(--fg3);
+  max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
-select.z.new{
-  color:var(--new);border-color:color-mix(in srgb,var(--new) 45%,var(--line));
-  background:color-mix(in srgb,var(--new) 7%,var(--surface2));
-}
-select.z.need{color:var(--warn);border-color:var(--warn);
-  background:color-mix(in srgb,var(--warn) 7%,var(--surface2))}
-input.newdir{
-  flex:1;min-width:0;padding:7px 10px;border-radius:var(--r-sm);
-  background:var(--surface2);border:1px solid var(--new);color:var(--new);
-  font:12.5px var(--mono);outline:none;
-}
-input.newdir::placeholder{color:var(--fg3)}
-.tgt .fx{
-  width:30px;flex:0 0 30px;border-radius:var(--r-sm);
-  border:1px solid var(--line);background:transparent;color:var(--fg3);
-  cursor:pointer;font-size:13px;transition:.14s;
-}
-.tgt .fx:hover{background:var(--hover);color:var(--fg)}
+.row .t.acc{color:var(--accent)}
+.row .t.err{color:var(--err)}
+.row .sz{flex:0 0 58px;text-align:right;color:var(--fg3);
+  font-family:var(--mono);font-size:11px}
 
-/* ── 按钮 ── */
-.btn{
-  background:var(--accent);color:var(--accent-fg);border:0;
-  padding:10px 22px;border-radius:var(--r);font:600 13.5px var(--font);
-  cursor:pointer;transition:.15s;
+.pick{
+  width:100%;padding:7px 10px;border-radius:var(--r-sm);
+  background:var(--surface2);border:1px solid var(--line2);
+  color:var(--fg2);font:12.5px inherit;cursor:pointer;outline:none;
+  text-align:left;display:flex;align-items:center;gap:6px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
+.pick:hover{border-color:var(--accent)}
+.pick.has{border-color:var(--ok);color:var(--ok);font-weight:500}
+.pick .caret{margin-left:auto;color:var(--fg3);font-size:10px;flex:0 0 auto}
+
+/* 文件级分配 */
+.filelist{
+  grid-column:1/-1;margin-top:6px;border-top:1px dashed var(--line);
+  padding-top:8px;
+}
+.frow{
+  display:grid;grid-template-columns:1fr 200px;gap:10px;align-items:center;
+  padding:5px 0;font-size:12px;
+}
+.frow .fn{color:var(--fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow .fn .fs{color:var(--fg3);font-family:var(--mono);font-size:10.5px;margin-left:6px}
+.frow .fn .dup{color:var(--err);font-size:10.5px;margin-left:6px}
+.pick.sm{padding:5px 8px;font-size:11.5px}
+.expand{
+  grid-column:1/-1;margin-top:6px;font-size:11.5px;color:var(--accent);
+  cursor:pointer;user-select:none;
+}
+.expand:hover{text-decoration:underline}
+
+/* 选择面板 */
+.panel{
+  position:fixed;inset:0;z-index:120;background:rgba(0,0,0,.45);
+  display:none;align-items:center;justify-content:center;padding:20px;
+}
+.panel.on{display:flex}
+.pbox{
+  background:var(--surface);border:1px solid var(--line2);border-radius:var(--r);
+  width:100%;max-width:420px;max-height:66vh;display:flex;flex-direction:column;
+  box-shadow:0 20px 50px rgba(0,0,0,.4);
+}
+.pbox .ph{padding:11px 14px;border-bottom:1px solid var(--line);
+  display:flex;gap:8px;align-items:center}
+.pbox .ph input{
+  flex:1;padding:7px 10px;border-radius:var(--r-sm);border:1px solid var(--line2);
+  background:var(--surface2);color:var(--fg);font:12.5px inherit;outline:none;
+}
+.pbox .ph input:focus{border-color:var(--accent)}
+.plist{flex:1;overflow-y:auto;padding:5px}
+.pitem{
+  padding:7px 10px;border-radius:var(--r-sm);cursor:pointer;
+  font-size:12.5px;display:flex;align-items:center;gap:8px;
+}
+.pitem:hover{background:var(--hover)}
+.pitem.on{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+.pitem.sub{padding-left:24px;color:var(--fg2);font-size:12px}
+.pitem .ck{color:var(--accent);font-size:11px;width:12px;flex:0 0 12px}
+.pgroup{
+  padding:8px 10px 4px;font-size:10.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--fg3);
+}
+
+.btn{background:var(--accent);color:var(--accent-fg);border:0;
+  padding:9px 20px;border-radius:var(--r-sm);font:600 13px inherit;
+  cursor:pointer;transition:.12s}
 .btn:hover{background:var(--accent-d)}
-.btn:active{transform:translateY(1px)}
-.btn.lg{padding:12px 30px;font-size:14.5px}
 .btn.gh{background:transparent;border:1px solid var(--line2);color:var(--fg2)}
 .btn.gh:hover{background:var(--hover);color:var(--fg)}
 .btn.sm{padding:6px 13px;font-size:12.5px}
 
-/* ── 状态栏 ── */
 .status{
-  flex:0 0 auto;display:flex;align-items:center;gap:12px;
-  padding:10px 24px;background:var(--surface);border-top:1px solid var(--line);
-  font-size:12.5px;color:var(--fg3);
+  flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:9px 20px;
+  background:var(--surface);border-top:1px solid var(--line);
+  font-size:12px;color:var(--fg3);
 }
 .status b{color:var(--fg2);font-family:var(--mono)}
-.status .sep{color:var(--line2)}
-.sdot{width:7px;height:7px;border-radius:50%;display:inline-block}
 
-/* ── 弹层 ── */
-.mask{
-  position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99;
-  display:none;align-items:center;justify-content:center;padding:26px;
-  backdrop-filter:blur(3px);
-}
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;
+  display:none;align-items:center;justify-content:center;padding:24px}
 .mask.on{display:flex}
-.modal{
-  background:var(--surface);border:1px solid var(--line2);border-radius:var(--r-lg);
-  width:100%;max-width:720px;max-height:76vh;display:flex;flex-direction:column;
-  box-shadow:var(--shadow-lg);
-}
-.modal h3{
-  padding:15px 20px;font-size:14px;font-weight:600;
-  border-bottom:1px solid var(--line);
-}
-.modal pre{
-  flex:1;overflow:auto;margin:0;padding:15px 20px;
-  font:11.5px/1.7 var(--mono);color:var(--fg2);
-  white-space:pre-wrap;word-break:break-all;
-}
-.modal .ft{
-  padding:12px 20px;border-top:1px solid var(--line);
-  display:flex;gap:9px;justify-content:flex-end;
-}
+.modal{background:var(--surface);border:1px solid var(--line2);
+  border-radius:var(--r);width:100%;max-width:700px;max-height:76vh;
+  display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+.modal h3{padding:14px 18px;font-size:13.5px;font-weight:600;
+  border-bottom:1px solid var(--line)}
+.modal pre{flex:1;overflow:auto;margin:0;padding:14px 18px;
+  font:11px/1.65 var(--mono);color:var(--fg2);white-space:pre-wrap;word-break:break-all}
+.modal .ft{padding:11px 18px;border-top:1px solid var(--line);
+  display:flex;gap:8px;justify-content:flex-end}
 
-@media(max-width:800px){
-  .core{padding:24px 16px 20px}
-  .core .num{font-size:50px}
-  .wrap{padding:14px 13px 50px}
-  .grp{grid-template-columns:1fr;gap:9px}
-  .top{padding:10px 14px}
-  .logo em{display:none}
+@media(max-width:760px){
+  .needitem{grid-template-columns:1fr;gap:8px}
+  .core{padding:18px 14px 14px}
+  .core .n{font-size:38px}
+  .wrap{padding:12px 12px 36px}
 }
 """
 
 BODY = r"""
 
 <div class="top">
-  <div class="logo">整理方案<em>__ROOT__</em></div>
+  <div class="logo">待办清单<em>__ROOT__</em></div>
   <div class="grow"></div>
-  <button class="tbtn" id="themeBtn" title="切换浅色 / 深色">◐</button>
+  <button class="tbtn" id="themeBtn">◐</button>
 </div>
 
 <div class="core">
-  <span class="num" id="coreNum">—</span>
+  <span class="n" id="coreN">—</span>
   <div class="lbl" id="coreLbl"></div>
   <div class="sub" id="coreSub"></div>
   <div class="cta" id="coreCta"></div>
@@ -372,10 +346,20 @@ BODY = r"""
 <div class="stage"><div class="wrap" id="main"></div></div>
 
 <div class="status">
-  <span id="stA">—</span><span class="sep">·</span>
+  <span id="stA">—</span><span style="color:var(--line2)">·</span>
   <span id="stB">—</span>
   <div class="grow"></div>
   <span id="stC"></span>
+</div>
+
+<div class="panel" id="panel">
+  <div class="pbox">
+    <div class="ph">
+      <input id="pq" placeholder="搜索目录…">
+      <button class="btn gh sm" onclick="closePanel()">取消</button>
+    </div>
+    <div class="plist" id="plist"></div>
+  </div>
 </div>
 
 <div class="mask" id="mask">
@@ -383,7 +367,7 @@ BODY = r"""
     <h3 id="mTitle"></h3>
     <pre id="mBody"></pre>
     <div class="ft">
-      <button class="btn gh sm" onclick="closeModal()">关闭</button>
+      <button class="btn gh sm" onclick="closeM()">关闭</button>
     </div>
   </div>
 </div>
@@ -392,402 +376,419 @@ BODY = r"""
 
 JS = r"""
 const DATA = __DATA__;
-const THEME_KEY = 'fo-theme';
-const DEC_KEY = 'fo-dec2-' + DATA.root.replace(/[\/:*?"<>|]/g,'_');
+const KEY = 'fo-b5-' + DATA.root.replace(/[\\/:*?"<>|]/g,'_');
 
-/* 决策：key = nodePath::idx → {mode, target, decided}
-   mode: keep | move | new                                        */
 let dec = {};
 
-/* ══════ 工具 ══════ */
-const esc = s => String(s ?? '').replace(/[&<>"]/g,
-  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const tail = p => {
-  if(p === '__keep__') return '保持原位';
-  const z = (DATA.zones || []).find(x => x.path === p);
-  if(z) return z.label;
-  return String(p).replace(/[\/]+$/,'').split(/[\/]/).pop() || p;
+/* 待确认项的建议值 —— 直接填好，不是空下拉 */
+const FIXED = {
+  "1": {
+    target: '__split__',
+    desc: '9 个文件横跨实验动画 / 凝胶电泳 pptx / 招生 pdf / 4 张照片 / ToDesk.exe',
+    note: '每个文件单独指定去向，见下方逐项',
+    files: [
+      {name:'1-【实验动画化】四分钟秒懂 DNA 凝胶电泳-1080P 高码率-AVC.mp4',
+       size:'32.47 MB', to:'G:\\学习资料\\生物', hint:'教学动画'},
+      {name:'凝胶电泳及其应用 (1).pptx',
+       size:'46.64 MB', to:'G:\\学习资料\\生物', hint:'课件'},
+      {name:'山东省2023年普通高等学校招生考试信息平台 - 报名信息查看.pdf',
+       size:'0.26 MB', to:'G:\\文件\\个人文档', hint:'招生信息'},
+      {name:'IMG_20221112_095511 (1).jpg',
+       size:'1.01 MB', to:'__delete__', dup:'与 IMG_20221112_095511.jpg 同哈希'},
+      {name:'IMG_20221112_095511.jpg',
+       size:'1.01 MB', to:'G:\\文件\\照片', hint:'手机拍摄'},
+      {name:'IMG_20221112_095515.jpg',
+       size:'1.16 MB', to:'G:\\文件\\照片', hint:'手机拍摄'},
+      {name:'微信图片_20221106125216.jpg',
+       size:'0.12 MB', to:'G:\\文件\\照片\\微信', hint:'微信保存'},
+      {name:'微信图片_202211061252161.jpg',
+       size:'0.12 MB', to:'G:\\文件\\照片\\微信', hint:'微信保存（哈希不同）'},
+      {name:'ToDesk.exe',
+       size:'1.48 MB', to:'G:\\文件\\软件安装包', hint:'远程工具'}
+    ]
+  },
+  "saves": {
+    target: '__merge__',
+    desc: '6 个世界存档，与 Minecraft\\saves 有 4 个完全相同、2 个不同版本',
+    note: '建议合并：补进 Minecraft\\saves，同名的不覆盖'
+  }
 };
-const num = n => n == null ? '—' : (n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n));
-const gk = (p, i) => p + '::' + i;
 
-/* ══════ 主题 ══════ */
-function initTheme(){
-  let t = null;
-  try{ t = localStorage.getItem(THEME_KEY); }catch(e){}
-  if(t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
-  syncThemeBtn();
-  document.getElementById('themeBtn').onclick = () => {
-    const isDark = getComputedStyle(document.body)
-      .getPropertyValue('--bg').trim().startsWith('#0')
-      || document.documentElement.dataset.theme === 'dark';
-    const next = isDark ? 'light' : 'dark';
-    document.documentElement.dataset.theme = next;
-    try{ localStorage.setItem(THEME_KEY, next); }catch(e){}
-    syncThemeBtn();
-  };
+/* 文件级分配状态：path -&gt; {文件名: 目标} */
+let fileDec = {};
+
+function esc(s){
+  return String(s ?? '').replace(/[&<>"]/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
-function syncThemeBtn(){
+
+function syncBtn(){
   const t = document.documentElement.dataset.theme;
   const dark = t === 'dark' ||
-    (!t && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  const b = document.getElementById('themeBtn');
-  b.textContent = dark ? '☾' : '☀';
-  b.title = dark ? '当前深色 · 点击切换浅色' : '当前浅色 · 点击切换深色';
+    (!t && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.getElementById('themeBtn').textContent = dark ? '☾' : '☀';
 }
+document.getElementById('themeBtn').onclick = () => {
+  const t = document.documentElement.dataset.theme;
+  const dark = t === 'dark' ||
+    (!t && matchMedia('(prefers-color-scheme: dark)').matches);
+  const next = dark ? 'light' : 'dark';
+  localStorage.setItem('fo-theme', next);
+  document.documentElement.dataset.theme = next;
+  syncBtn();
+};
 
-/* ══════ 建议算法 ══════ */
-/* 跨类关键词 → 该去哪个已有区（按区名匹配） */
-const CROSS = [
-  { keys:['番剧','动画','动漫'], to:['影视','Video','番'] },
-  { keys:['电影','影片','剧集','短剧','MV','录屏'], to:['影视','Video'] },
-  { keys:['ASMR','音声'], to:['ASMR'] },
-  { keys:['galgame','成人'], to:['H_Library'] },
-  { keys:['安装包','破解','插件'], to:['软件安装包'] },
-  { keys:['课程','教程','教材'], to:['文档','个人文档'] },
-  { keys:['镜像','刷机','装机','驱动'], to:['系统镜像'] },
-  { keys:['模型','工作流','词库','LoRA','embedding','ComfyUI','训练'], to:['AI工具'] },
-  { keys:['游戏','Minecraft'], to:['游戏'] },
-  { keys:['备份','还原点'], to:['backup'] },
-];
-
-/* 这些关键词暗示"该新建一个分类" */
-const NEW_HINT = [
-  { keys:['刷机','ROM','TWRP'], name:'安卓刷机' },
-  { keys:['电子书','教材','PDF','小说'], name:'电子书' },
-  { keys:['字体','字库'], name:'字体' },
-  { keys:['驱动'], name:'驱动' },
-  { keys:['壁纸'], name:'壁纸' },
-];
-
-/* 建议由 core/decisions.py 预先算好，前端只读 */
-
-/* 从组名提取一个短分类名 */
-function groupIdiom(name){
-  const s = name.split(/[（(\/·,，]/)[0].trim();
-  return s.length > 12 ? s.slice(0, 12) : (s || '新分类');
-}
-
-/* ══════ 初始化 ══════ */
-function initDec(){
-  DATA.nodes.forEach(n => {
-    if(!n.groups) return;
-    n.groups.forEach((g, i) => {
-      const k = gk(n.path, i);
-      if(dec[k]) return;
-      const sg = g.suggest || {mode:'keep'};
-      dec[k] = {
-        mode: sg.mode,
-        target: sg.target || '',
-        name: sg.newName || '',
-        parent: sg.newParent || '',
-        decided: false,
-        attn: !!sg.needsCheck,
-      };
-    });
+function init(){
+  DATA.u.forEach(it => {
+    if(FIXED[it.name]){
+      dec[it.path] = {target: FIXED[it.name].target};
+      return;
+    }
+    if(it.action === 'move') dec[it.path] = {target: it.target || ''};
+    else if(it.action === 'delete') dec[it.path] = {target: '__delete__'};
+    else if(it.action === 'keep') dec[it.path] = {target: '__keep__'};
+    else dec[it.path] = {target: ''};
   });
-}
-function looksCross(name){
-  return ['番','音声','ASMR','galgame','安装包','镜像','课程','电影','MV',
-          '刷机','电子书','字体','驱动'].some(k => name.indexOf(k) >= 0);
+  DATA.pending.forEach(it => { dec['P:'+it.path] = {target: ''}; });
 }
 
-/* ══════ 统计 ══════ */
 function stats(){
-  let total=0, keep=0, move=0, newd=0, attn=0, manual=0;
-  DATA.nodes.forEach(n => {
-    if(!n.groups) return;
-    n.groups.forEach((g,i) => {
-      const d = dec[gk(n.path,i)];
-      if(!d) return;
-      total++;
-      if(d.mode === 'keep') keep++;
-      else if(d.mode === 'move') move++;
-      else newd++;
-      if(d.attn && !d.decided) attn++;
-      if(d.decided) manual++;
-    });
+  let mv=0, dl=0, kp=0, need=0, fx=0;
+  DATA.u.forEach(it => {
+    const t = dec[it.path]?.target || '';
+    if(FIXED[it.name]) fx++;
+    if(!t) need++;
+    else if(t === '__delete__') dl++;
+    else if(t === '__keep__') kp++;
+    else mv++;
   });
-  return {total, keep, move, newd, attn, manual};
+  return {mv, dl, kp, need, fx};
 }
 
-/* ══════ 渲染核心 ══════ */
 function renderCore(){
   const s = stats();
-  const nEl = document.getElementById('coreNum');
-  const need = s.attn + s.manual;
-  nEl.textContent = need;
-  nEl.classList.toggle('zero', need === 0);
+  const nEl = document.getElementById('coreN');
+  nEl.textContent = s.need;
+  nEl.classList.toggle('zero', s.need === 0);
 
   document.getElementById('coreLbl').textContent =
-    need === 0 ? '方案已就绪' : '组需要你看一眼';
+    s.need === 0 ? '全部已就绪' : '项需要你确认';
 
-  let parts = [`一共 <b>${s.total}</b> 组。`];
-  if(s.keep) parts.push(`<b>${s.keep}</b> 组保持原位`);
-  if(s.move) parts.push(`<b>${s.move}</b> 组移到已有目录`);
-  if(s.newd) parts.push(`<b>${s.newd}</b> 组建议新建目录`);
-  let sub = parts.join('，') + '。';
-
-  if(need > 0){
-    sub += `<br>下面标了橙色的 <b>${s.attn}</b> 组，我拿不准该放哪——` +
-           `尤其「新建目录」的，请确认名字对不对。`;
-  }
+  let sub = `u 目录 <b>${DATA.u.length}</b> 项：` +
+            `<b>${s.mv}</b> 移到别处 · <b>${s.dl}</b> 待删除 · <b>${s.kp}</b> 不动。`;
+  if(s.fx) sub += `<br>其中 <b>${s.fx}</b> 项我已填好建议值，确认即可。`;
   document.getElementById('coreSub').innerHTML = sub;
 
   document.getElementById('coreCta').innerHTML =
-    `<button class="btn" onclick="acceptAll()">全部采纳</button>` +
-    `<button class="btn gh" onclick="showList()">查看清单</button>`;
+    `<button class="btn" onclick="showList()">生成执行清单</button>` +
+    `<button class="btn gh" onclick="acceptAll()">全部采纳</button>`;
 }
 
-/* ══════ 渲染列表 ══════ */
-function renderList(){
+function render(){
   const main = document.getElementById('main');
-  const zones = DATA.zones || [];
-  const nodes = DATA.nodes.filter(n => n.groups && n.groups.length);
-  if(!nodes.length){ main.innerHTML = ''; return; }
+  let html = '';
 
-  main.innerHTML = nodes.map(n => {
-    const attn = n.groups.filter((g,i) => {
-      const d = dec[gk(n.path,i)];
-      return d && d.attn && !d.decided;
-    }).length;
-
-    let h = `<div class="node${attn?' attn':''}" data-p="${esc(n.path)}">
-      <div class="node-hd" onclick="this.parentElement.classList.toggle('open')">
-        <span class="dot"></span>
-        <span class="t"><b>${esc(n.name)}</b><span>${n.groups.length} 组 · ${
-          num(n.total_units || n.groups.reduce((s,g)=>s+g.n,0))} 单元</span></span>
-        ${attn ? `<span class="tag warn">${attn} 组待确认</span>`
-               : `<span class="tag ok">已安排</span>`}
-        <span class="chev">›</span>
-      </div><div class="node-bd">`;
-
-    n.groups.forEach((g,i) => {
-      const k = gk(n.path,i);
-      const d = dec[k];
-      h += `<div class="grp${d.attn && !d.decided ? ' attn' : ''}" data-k="${esc(k)}">
-        <div class="bd">
-          <div class="nm">${esc(g.name)}${
-            g.relationText ? `<span class="rel">${esc(g.relationText)}</span>` : ''}</div>
-          <div class="meta">${g.n} 个单元${
-            g.why ? ' · ' + esc(g.why.slice(0, 64)) : ''}</div>
+  // ① 待确认
+  const needs = DATA.u.filter(it => FIXED[it.name] || !(dec[it.path]?.target));
+  if(needs.length){
+    html += `<div class="needcard"><div class="hd">需要你确认　${needs.length} 项</div>`;
+    needs.forEach(it => {
+      const d = dec[it.path] || {};
+      const fx = FIXED[it.name];
+      const hasFiles = fx && fx.files && fx.files.length;
+      html += `<div class="needitem">
+        <div>
+          <div class="nm">${esc(it.name)}</div>
+          <div class="ds">${esc(fx ? fx.desc : it.desc)}
+            ${fx ? `<em>${esc(fx.note)}</em>` : ''}</div>
+          ${!hasFiles ? `<button class="pick${d.target?' has':''}" data-k="${esc(it.path)}"
+            style="margin-top:8px">
+            <span>${esc(targetLabel(d.target || ''))}</span>
+            <span class="caret">▾</span></button>` : ''}
         </div>
-        <div class="tgt" id="tgt-${esc(k).replace(/[^a-zA-Z0-9]/g,'_')}">
-          ${targetHtml(k, d, zones)}
-        </div>
+        ${!hasFiles ? '<div></div>' : '<div></div>'}
+        ${hasFiles ? renderFiles(it, fx) : ''}
       </div>`;
     });
-    return h + '</div></div>';
-  }).join('');
-
-  bindTargets(main);
-}
-
-function targetHtml(k, d, zones){
-  if(!d) return '';
-  const cls = d.mode === 'keep' ? 'keep' : d.mode === 'move' ? 'move'
-    : (d.attn && !d.decided ? 'need' : 'new');
-
-  let opts = `<option value="__keep__"${d.mode==='keep'?' selected':''}>保持原位</option>`;
-
-  // 按一级分组，用 optgroup
-  const byTop = {};
-  zones.forEach(z => {
-    const top = z.label.split('/')[0];
-    if(!byTop[top]) byTop[top] = [];
-    byTop[top].push(z);
-  });
-  Object.keys(byTop).sort().forEach(top => {
-    const list = byTop[top];
-    // 一级自己也是一个选项
-    const topZone = list.find(x => x.depth === 1);
-    if(topZone){
-      const on = d.mode === 'move' && d.target === topZone.path;
-      opts += `<option value="${esc(topZone.path)}"${on?' selected':''}>` +
-              `${esc(top)}</option>`;
-    }
-    // 子级放 optgroup
-    const subs = list.filter(x => x.depth > 1);
-    if(subs.length){
-      opts += `<optgroup label="${esc(top)} 里的子目录">`;
-      subs.forEach(z => {
-        const on = d.mode === 'move' && d.target === z.path;
-        const ind = '　'.repeat(z.depth - 2);
-        opts += `<option value="${esc(z.path)}"${on?' selected':''}>` +
-                `${ind}${esc(z.label.split('/').slice(1).join('/'))}</option>`;
-      });
-      opts += '</optgroup>';
-    }
-  });
-  opts += `<option value="__new__"${d.mode==='new'?' selected':''}>＋ 新建目录…</option>`;
-
-  let html = `<div class="row">
-    <select class="z ${cls}" data-k="${esc(k)}">${opts}</select>
-    <button class="fx" title="回到建议值" onclick="resetOne('${esc(k).replace(/'/g,"\'")}')">↺</button>
-  </div>`;
-
-  if(d.mode === 'new'){
-    html += `<input class="newdir" data-nk="${esc(k)}"
-      value="${esc(d.name || '')}" placeholder="新目录名">`;
+    html += '</div>';
   }
-  return html;
-}
 
-function bindTargets(root){
-  root.querySelectorAll('select.z').forEach(el => {
-    el.onchange = () => {
-      const k = el.dataset.k;
-      const d = dec[k];
-      if(el.value === '__new__'){
-        d.mode = 'new';
-        d.name = d.name || groupIdiom('');
-        d.attn = true;
-      } else if(el.value === '__keep__'){
-        d.mode = 'keep'; d.target = ''; d.attn = false;
-      } else {
-        d.mode = 'move'; d.target = el.value; d.attn = false;
-      }
-      d.decided = true;
-      save(); repaint();
-    };
-  });
-  root.querySelectorAll('input.newdir').forEach(el => {
-    el.oninput = () => {
-      const k = el.dataset.nk;
-      if(dec[k]){ dec[k].name = el.value; dec[k].decided = true; save(); }
-    };
-    el.onblur = () => { repaint(); };
-    el.onkeydown = ev => { if(ev.key === 'Enter'){ ev.preventDefault(); el.blur(); } };
-  });
-}
-
-function resetOne(k){
-  const n = DATA.nodes.find(x => k.indexOf(x.path + '::') === 0);
-  if(!n) return;
-  const idx = +k.split('::').pop();
-  const g = n.groups[idx];
-  const s = suggest(g.name, n.name, DATA.zones || []);
-  dec[k] = {
-    mode: s.mode, target: s.target || '', name: s.name || '',
-    decided: false,
-    attn: s.mode === 'new' || (s.mode === 'keep' && looksCross(g.name)),
+  // ② 折叠组
+  const fold = (title, items, fmt) => {
+    if(!items.length) return '';
+    let h = `<div class="fold"><div class="fold-hd" onclick="this.parentElement.classList.toggle('open')">
+      <span class="t">${title}</span>
+      <span class="c">${items.length} 项</span>
+      <span class="chev">›</span></div><div class="fold-bd">`;
+    items.forEach(it => { h += fmt(it); });
+    return h + '</div></div>';
   };
-  save(); repaint();
-}
 
-function repaint(){
-  renderCore();
-  renderList();
-  renderStatus();
-}
+  const isFixed = it => !!FIXED[it.name];
+  const tgt = it => dec[it.path]?.target || '';
 
-/* ══════ 状态栏 ══════ */
-function renderStatus(){
-  const s = stats();
-  document.getElementById('stA').innerHTML = `共 <b>${s.total}</b> 组`;
-  document.getElementById('stB').innerHTML =
-    `原位 <b>${s.keep}</b> · 移动 <b>${s.move}</b> · 新建 <b>${s.newd}</b>`;
-  document.getElementById('stC').innerHTML =
-    s.manual ? `手动调整 <b>${s.manual}</b> 组` : '全部为建议值';
-}
+  html += fold('建议删除',
+    DATA.u.filter(it => !isFixed(it) && tgt(it) === '__delete__'),
+    it => `<div class="row">
+      <span class="n">${esc(it.name)}<span class="k">${esc(it.kind)}</span></span>
+      <span class="t err">${esc(it.desc)}</span>
+      <span class="sz">${it.gb} GB</span></div>`);
 
-/* ══════ 操作 ══════ */
-function acceptAll(){
-  Object.keys(dec).forEach(k => {
-    dec[k].attn = false;
-    dec[k].decided = true;
+  html += fold('移到别处',
+    DATA.u.filter(it => !isFixed(it) && tgt(it) && tgt(it) !== '__delete__' && tgt(it) !== '__keep__'),
+    it => `<div class="row">
+      <span class="n">${esc(it.name)}<span class="k">${esc(it.kind)}</span></span>
+      <span class="t acc">→ ${esc(shortPath(tgt(it)))}</span>
+      <span class="sz">${it.gb} GB</span></div>`);
+
+  html += fold('保持不动',
+    DATA.u.filter(it => !isFixed(it) && tgt(it) === '__keep__'),
+    it => `<div class="row">
+      <span class="n">${esc(it.name)}<span class="k">${esc(it.kind)}</span></span>
+      <span class="t">${esc(it.desc.slice(0,36))}</span>
+      <span class="sz">${it.gb} GB</span></div>`);
+
+  // ③ 待删除区
+  if(DATA.pending.length){
+    html += `<div class="fold open"><div class="fold-hd" onclick="this.parentElement.classList.toggle('open')">
+      <span class="t">待删除区</span>
+      <span class="c">${DATA.pending.length} 项 · ${DATA.summary.pendingGB} GB</span>
+      <span class="chev">›</span></div><div class="fold-bd">`;
+    DATA.pending.forEach(it => {
+      const v = dec['P:'+it.path]?.target || '';
+      html += `<div class="row">
+        <span class="n">${esc(it.name)}</span>
+        <button class="pick${v?' has':''}" data-k="P:${esc(it.path)}"
+          style="flex:0 0 140px">${v==='__delete__'?'确认删除':'留在待删除'}</button>
+        <span class="sz">${it.gb} GB</span></div>`;
+    });
+    html += '</div></div>';
+  }
+
+  main.innerHTML = html;
+  main.querySelectorAll('.pick').forEach(el => {
+    el.onclick = () => {
+      if(el.dataset.fk) openPanel(el.dataset.fk);
+      else openPanel(el.dataset.k);
+    };
   });
-  save(); repaint();
+}
+
+function renderFiles(it, fx){
+  if(!fileDec[it.path]){
+    fileDec[it.path] = {};
+    fx.files.forEach(f => { fileDec[it.path][f.name] = f.to; });
+  }
+  const cur = fileDec[it.path];
+  let h = `<div class="filelist">`;
+  fx.files.forEach(f => {
+    const v = cur[f.name] || '';
+    const isDup = f.dup;
+    h += `<div class="frow">
+      <span class="fn">${esc(f.name.length > 56 ? f.name.slice(0,54)+'…' : f.name)}
+        <span class="fs">${esc(f.size)}</span>
+        ${isDup ? `<span class="dup">⚠ ${esc(f.dup)}</span>` : (f.hint ? `<span class="fs">${esc(f.hint)}</span>` : '')}
+      </span>
+      <button class="pick sm${v?' has':''}"
+        data-fk="${esc(it.path)}||${esc(f.name)}">
+        <span>${esc(targetLabel(v))}</span><span class="caret">▾</span>
+      </button>
+    </div>`;
+  });
+  return h + '</div>';
+}
+
+function shortPath(p){
+  if(p === '__split__') return '拆开归位';
+  if(p === '__merge__') return '合并';
+  const z = (DATA.zones||[]).find(x => (typeof x === 'object' ? x.path : x) === p);
+  return z && typeof z === 'object' ? z.label : String(p).split(/[\\/]/).pop();
+}
+
+let panelKey = null;
+
+function targetLabel(v){
+  if(!v) return '— 请选择 —';
+  if(v === '__split__') return '拆开归位（建议）';
+  if(v === '__merge__') return '合并（建议）';
+  if(v === '__keep__') return '保持原位';
+  if(v === '__delete__') return '移到待删除';
+  return shortPath(v);
+}
+
+function openPanel(key){
+  panelKey = key;
+  document.getElementById('pq').value = '';
+  renderPanel('');
+  document.getElementById('panel').classList.add('on');
+  setTimeout(() => document.getElementById('pq').focus(), 50);
+}
+
+function closePanel(){
+  document.getElementById('panel').classList.remove('on');
+  panelKey = null;
+}
+
+function choose(v){
+  if(panelKey){
+    if(panelKey.indexOf('||') >= 0){
+      const [p, f] = panelKey.split('||');
+      if(!fileDec[p]) fileDec[p] = {};
+      fileDec[p][f] = v;
+    } else {
+      dec[panelKey] = {target: v};
+    }
+    save();
+    render(); renderCore(); renderStatus();
+  }
+  closePanel();
+}
+
+function renderPanel(q){
+  const list = document.getElementById('plist');
+  let cur = '';
+  if(panelKey && panelKey.indexOf('||') >= 0){
+    const [p, f] = panelKey.split('||');
+    cur = (fileDec[p] || {})[f] || '';
+  } else {
+    cur = dec[panelKey]?.target || '';
+  }
+  const lower = q.toLowerCase();
+  const hit = t => !q || t.toLowerCase().indexOf(lower) >= 0;
+
+  let h = '';
+
+  // 建议项
+  const fixed = (DATA.u||[]).find(it => it.path === panelKey);
+  const sug = fixed ? FIXED[fixed.name] : null;
+  if(sug && hit('建议')){
+    h += `<div class="pitem${cur===sug.target?' on':''}" onclick="choose('${sug.target}')">
+      <span class="ck">${cur===sug.target?'✓':''}</span>★ ${esc(targetLabel(sug.target))}</div>`;
+  }
+
+  // 通用选项
+  [['__keep__','保持原位'], ['__delete__','移到待删除']].forEach(([v,t]) => {
+    if(hit(t)) h += `<div class="pitem${cur===v?' on':''}" onclick="choose('${v}')">
+      <span class="ck">${cur===v?'✓':''}</span>${t}</div>`;
+  });
+
+  // 按一级分组
+  const byTop = {};
+  (DATA.zones||[]).forEach(z => {
+    const zp = (typeof z === 'string') ? z : z.path;
+    const zl = (typeof z === 'string') ? zp : (z.label || z.path);
+    const depth = (typeof z === 'string') ? 1 : (z.depth || 1);
+    const top = zl.split('/')[0];
+    (byTop[top] = byTop[top] || []).push({path: zp, label: zl, depth});
+  });
+
+  Object.keys(byTop).sort().forEach(top => {
+    const all = byTop[top];
+    const self = all.find(x => x.depth === 1);
+    const subs = all.filter(x => x.depth > 1);
+
+    // 一级目录本身作为可选项
+    const selfHit = self && (hit(top));
+    const subHit = subs.filter(z => hit(z.label));
+
+    if(!selfHit && !subHit.length) return;
+
+    // 只有存在子目录时才打分组头，否则直接列一项
+    if(selfHit && subs.length) h += `<div class="pgroup">${esc(top)}</div>`;
+    if(selfHit){
+      h += `<div class="pitem${cur===self.path?' on':''}"
+        onclick="choose(this.dataset.p)" data-p="${esc(self.path)}">
+        <span class="ck">${cur===self.path?'✓':''}</span>${esc(top)}</div>`;
+    }
+    subHit.forEach(z => {
+      const name = z.label.split('/').slice(1).join('/');
+      h += `<div class="pitem sub${cur===z.path?' on':''}"
+        onclick="choose(this.dataset.p)" data-p="${esc(z.path)}">
+        <span class="ck">${cur===z.path?'✓':''}</span>${esc(name)}</div>`;
+    });
+  });
+
+  if(!h) h = `<div class="pitem" style="color:var(--fg3)">没有匹配的目录</div>`;
+  list.innerHTML = h;
+}
+
+function acceptAll(){
+  DATA.u.forEach(it => {
+    if(!dec[it.path]?.target) dec[it.path] = {target: '__keep__'};
+  });
+  save(); renderCore(); render(); renderStatus();
 }
 
 function showList(){
-  const lines = [];
-  const s = stats();
-  DATA.nodes.forEach(n => {
-    if(!n.groups) return;
-    n.groups.forEach((g,i) => {
-      const d = dec[gk(n.path,i)];
-      if(!d) return;
-      const to = d.mode === 'keep' ? '【保持原位】'
-        : d.mode === 'move' ? d.target
-        : '【新建】' + (d.name || '???');
-      lines.push([n.path, g.name, to].join('	'));
-    });
+  const mv=[], dl=[], kp=[], sp=[], mg=[];
+  DATA.u.forEach(it => {
+    const t = dec[it.path]?.target || '__keep__';
+    if(t === '__split__') sp.push(it.path);
+    else if(t === '__merge__') mg.push(it.path);
+    else if(t === '__delete__') dl.push(it.path);
+    else if(t === '__keep__') kp.push(it.path);
+    else mv.push(it.path + '  →  ' + t);
   });
-  openModal(`整理清单　共 ${s.total} 组`, lines.join('
-'));
+  let txt = `# 待办清单  ${DATA.generated}\n\n`;
+  txt += `## 移到别处（${mv.length}）\n${mv.join('\n') || '（无）'}\n\n`;
+  txt += `## 拆开归位（${sp.length}）\n${sp.join('\n') || '（无）'}\n\n`;
+  txt += `## 合并（${mg.length}）\n${mg.join('\n') || '（无）'}\n\n`;
+  txt += `## 移到待删除（${dl.length}）\n${dl.join('\n') || '（无）'}\n\n`;
+  txt += `## 保持不动（${kp.length}）\n${kp.map(x=>'  '+x).join('\n')}\n`;
+  document.getElementById('mTitle').textContent = '执行清单';
+  document.getElementById('mBody').textContent = txt;
+  document.getElementById('mask').classList.add('on');
 }
+function closeM(){ document.getElementById('mask').classList.remove('on'); }
 
-/* ══════ 持久化 ══════ */
 function save(){
-  try{
-    localStorage.setItem(DEC_KEY, JSON.stringify({dec, at:Date.now()}));
-  }catch(e){}
+  try{ localStorage.setItem(KEY, JSON.stringify({dec, fileDec, at:Date.now()})); }catch(e){}
 }
 function load(){
   try{
-    const raw = localStorage.getItem(DEC_KEY);
+    const raw = localStorage.getItem(KEY);
     if(!raw) return false;
     const o = JSON.parse(raw);
-    if(!o || !o.at || Date.now() - o.at > 60*864e5) return false;
+    if(!o || !o.at || Date.now()-o.at > 30*864e5) return false;
     dec = o.dec || {};
-    return true;
+    fileDec = o.fileDec || {};
+    return Object.keys(dec).length > 0;
   }catch(e){ return false; }
 }
 
-/* ══════ 弹层 ══════ */
-function openModal(t,b){
-  document.getElementById('mTitle').textContent = t;
-  document.getElementById('mBody').textContent = b;
-  document.getElementById('mask').classList.add('on');
+function renderStatus(){
+  const s = stats();
+  document.getElementById('stA').innerHTML = `u: <b>${DATA.u.length}</b> 项`;
+  document.getElementById('stB').innerHTML =
+    `移动 <b>${s.mv}</b> · 待删 <b>${s.dl}</b> · 不动 <b>${s.kp}</b>`;
+  document.getElementById('stC').innerHTML =
+    s.need ? `<b>${s.need}</b> 项待定` : '全部已定';
 }
-function closeModal(){ document.getElementById('mask').classList.remove('on'); }
 
-/* ══════ 对外接口 ══════ */
-window.foState = function(){
-  const out = {root: DATA.root, stats: stats(), groups: []};
-  DATA.nodes.forEach(n => {
-    if(!n.groups) return;
-    n.groups.forEach((g,i) => {
-      const d = dec[gk(n.path,i)];
-      if(!d) return;
-      out.groups.push({
-        nodePath: n.path, nodeName: n.name, groupName: g.name,
-        unitCount: g.n,
-        mode: d.mode,
-        target: d.mode === 'move' ? d.target
-              : d.mode === 'new' ? d.name : '__keep__',
-        userDecided: !!d.decided,
-        needsAttention: !!d.attn && !d.decided
-      });
-    });
-  });
-  return out;
-};
-window.foPending = () => window.foState().groups
-  .filter(g => g.needsAttention);
-window.foNewDirs = () => window.foState().groups
-  .filter(g => g.mode === 'new' && g.target);
-window.foAcceptAll = acceptAll;
-
-/* ══════ 启动 ══════ */
-initTheme();
-load();
-initDec();
-repaint();
-
+const th = localStorage.getItem('fo-theme');
+if(th) document.documentElement.dataset.theme = th;
+syncBtn();
+if(!load()) init();
+renderCore();
+render();
+renderStatus();
 document.getElementById('mask').onclick = e => {
-  if(e.target.id === 'mask') closeModal();
+  if(e.target.id === 'mask') closeM();
+};
+document.getElementById('pq').oninput = e => renderPanel(e.target.value);
+document.getElementById('panel').onclick = e => {
+  if(e.target.id === 'panel') closePanel();
 };
 document.addEventListener('keydown', e => {
-  if(e.key === 'Escape') closeModal();
+  if(e.key === 'Escape') closePanel();
 });
+window.foState = () => ({ dec, stats: stats() });
 """
 
 
 def render_html(root, data):
     return (
-        '<!DOCTYPE html>\n<html lang="zh-CN" data-theme="ink"><head>'
+        '<!DOCTYPE html>\n<html lang="zh-CN"><head>'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
         '<title>packtidy</title>\n<style>'

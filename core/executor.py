@@ -19,6 +19,7 @@ import tempfile
 import uuid
 
 from safety import (SafetyError, MARKER_FIELDS, PROTECTED_NAMES, assert_no_links,
+                    nested_verdict,
                     block_kind, encode_tsv, is_reparse, key, load_markers,
                     normal, read_tsv, replace_path, within)
 
@@ -377,8 +378,10 @@ def guard(path, root, markers, descendants=False, allow_root=False):
     if kind:
         raise SafetyError('凭据类路径已排除' if kind == 'SECRET' else '命中保护标记 ' + kind)
     assert_no_links(path)
-    if any(part.casefold() in PROTECTED_NAMES for part in Path(path).parts):
-        raise SafetyError('命中受保护目录')
+    # 嵌套判定：受保护区内可以有允许点（C:\Program Files\x\Downloads 可动）
+    allowed, why = nested_verdict(path)
+    if not allowed:
+        raise SafetyError('命中受保护目录：' + why)
     if descendants and os.path.isdir(path):
         # Never enter a link; fail on read errors instead of assuming an empty tree.
         def fail(exc):

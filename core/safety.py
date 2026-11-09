@@ -25,6 +25,80 @@ PROTECTED_NAMES = {
 }
 
 
+# ═══════════════════════════════════════════════════════════
+# 嵌套白名单：保护区内可以动的点
+#
+# 场景：C:\Program Files\某软件\ 整体不能动，
+#       但 C:\Users\x\Downloads\ 属于"在受保护区里、但内容该整理"。
+#
+# 判定顺序（后者优先）：
+#   1. 命中 PROTECTED_NAMES  → 默认保护
+#   2. 命中 NESTED_ALLOW     → 放行，可整理
+#   3. 命中 NESTED_DENY      → 强制保护（即使父级被放行）
+# ═══════════════════════════════════════════════════════════
+
+# 这些名字出现在受保护区内时，其中内容仍可整理
+NESTED_ALLOW = {
+    "downloads", "download", "桌面", "desktop", "documents", "文档",
+    "temp", "tmp", "缓存", "cache", "临时", "捕获", "captures",
+    "screenshots", "screenshot", "截图", "录屏", "recordings",
+    "output", "outputs", "导出", "export",
+    "_待删除", "_重复待确认", "_未归类",
+}
+
+# 这些名字即使出现在被放行的区域里，也不动
+NESTED_DENY = {
+    "node_modules", ".git", "site-packages", "venv", ".venv",
+    "steamapps", "appdata", "windows", "system32", "syswow64",
+    "program files", "program files (x86)", "programdata",
+    "$recycle.bin", "system volume information",
+}
+
+
+def nested_verdict(path):
+    """判断路径的嵌套保护状态。
+
+    返回 (允许整理, 依据)
+      允许=True  可以整理
+      允许=False 不动
+    """
+    parts = []
+    try:
+        import os as _os
+        p = _os.path.abspath(_os.fspath(path))
+        while True:
+            head, tail = _os.path.split(p)
+            if not tail:
+                break
+            parts.append(tail.casefold())
+            if head == p:
+                break
+            p = head
+    except (TypeError, ValueError):
+        return (False, "路径无法解析")
+
+    parts.reverse()   # 从根到叶
+
+    # 从浅到深扫描，后面的覆盖前面的
+    allow_at = -1
+    deny_at = -1
+    allow_name = deny_name = ""
+
+    for i, seg in enumerate(parts):
+        if seg in NESTED_DENY:
+            deny_at, deny_name = i, seg
+        elif seg in NESTED_ALLOW:
+            allow_at, allow_name = i, seg
+        elif seg in PROTECTED_NAMES:
+            deny_at, deny_name = i, seg
+
+    if deny_at > allow_at:
+        return (False, f"'{deny_name}' 在更深处，优先保护")
+    if allow_at >= 0:
+        return (True, f"'{allow_name}' 是允许整理的区域")
+    return (True, "无保护标记")
+
+
 class SafetyError(ValueError):
     pass
 
