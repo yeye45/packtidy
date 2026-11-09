@@ -523,6 +523,25 @@ def build_ai_question(group_name, node_name, node_path, suggest,
             "evidence": suggest.get("evidence") or [],
         },
         "question": _ai_question_text(suggest, shape, trigger),
+        "requiredOutput": {
+            "flow": "猜想 → 验证 → 确认，三步都要走",
+            "fields": {
+                "hypothesis": "最初认为这是什么（写完再去验）",
+                "verification": {
+                    "method": "怎么查的：查了哪个站、看了什么文件",
+                    "findings": "查到什么，支持还是推翻猜测",
+                    "disproved": "推翻过什么假设（空数组也要说明没推翻）",
+                },
+                "confirmation": {
+                    "holds": "true/false——你的判断站得住吗",
+                    "confidence": "high/medium/low",
+                    "why": "为什么确认（或为什么不确认）",
+                    "residualRisk": "还剩什么不确定",
+                },
+            },
+            "note": "代码不检查你验得够不够。它会原样记下这条链，"
+                    "人看到推理过程自己判断。",
+        },
     }
 
 
@@ -722,15 +741,37 @@ def is_category_node(name):
 
 
 def apply_answers(nodes, answers_path):
-    """把 AI 子代理的判断回填到建议里。
+    """把 AI 的判断回填。代码只记录，不做确认。
+
+    AI 自己走完三步，代码如实记下：
+      猜想 hypothesis    最初认为这是什么
+      验证 verification  怎么查的、查到什么、推翻过什么
+      确认 confirmation  是否站得住、置信度、残余风险
 
     答案格式：
-      {"answers": [{"group": "...", "parent": "...",
-                    "category": "...", "label": "...",
-                    "confidence": "high|medium|low",
-                    "evidence": "..."}]}
+      {"answers": [{
+          "group": "...", "parent": "...",
+          "category": "...", "label": "...",
+          "hypothesis": "最初猜它是什么",
+          "verification": {
+            "method": "查了 DLsite 作品页 / 看了 exe 签名",
+            "findings": "确认为编辑器 + 声库",
+            "disproved": ["最初按名字以为是成品音乐"]
+          },
+          "confirmation": {
+            "holds": true,
+            "confidence": "high|medium|low",
+            "why": "为什么确认站得住",
+            "residualRisk": "还剩什么不确定"
+          }
+        }]}
 
-    按 (parent, group) 匹配。找不到对应组的答案忽略并报告。
+    **代码不判断验证够不够。** 那是 AI 的活——
+    它会写下理由和残余风险，人看到整条推理链自己决定。
+
+    代码只做一件事实性的事：
+      记录 confirmation 是否给出、holds 是否为真。
+      没给出的，在报告里列出，不替它降级。
     """
     import json as _json
     from pathlib import Path as _P
@@ -747,13 +788,14 @@ def apply_answers(nodes, answers_path):
         print("答案格式错误：需要 answers 数组", file=sys.stderr)
         return 0, 0
 
-    # 建索引：(parent, group) → 组
     index = {}
     for n in nodes:
         for g in n["groups"]:
             index[(n["name"], g["name"])] = g
 
     applied = missed = 0
+    incomplete = []
+
     for a in items:
         if not isinstance(a, dict):
             continue
@@ -762,32 +804,69 @@ def apply_answers(nodes, answers_path):
         if not g:
             missed += 1
             continue
-        conf = str(a.get("confidence") or "medium").lower()
-        if conf not in ("high", "medium", "low"):
-            conf = "medium"
+
         sg = g.setdefault("suggest", {})
-        # AI 判断覆盖原来的建议
         cat = a.get("category")
         label = a.get("label") or cat
         if cat:
             sg["mode"] = "new"
             sg["newName"] = label
             sg["newParent"] = None
+
+        ver = a.get("verification") or {}
+        conf = a.get("confirmation") or {}
+
+        # 原样记录 AI 交来的全部内容
         sg["aiJudgement"] = {
             "category": cat,
             "label": label,
-            "confidence": conf,
-            "evidence": a.get("evidence") or "",
+            "hypothesis": a.get("hypothesis") or "",
+            "verification": {
+                "method": ver.get("method") or "",
+                "findings": ver.get("findings") or "",
+                "disproved": ver.get("disproved") or [],
+            },
+            "confirmation": {
+                "holds": conf.get("holds"),
+                "confidence": conf.get("confidence") or "",
+                "why": conf.get("why") or "",
+                "residualRisk": conf.get("residualRisk") or "",
+            },
         }
-        # high 置信度视为已定论，不再标待确认
-        if conf == "high":
-            sg["needsCheck"] = False
-        else:
+
+        # 事实性记录：AI 有没有做完确认
+        has_confirmation = isinstance(conf, dict) and conf.get("holds") is not None
+        has_verification = bool((ver.get("method") or "").strip())
+
+        if not (has_confirmation and has_verification):
+            incomplete.append((a.get("parent"), a.get("group"),
+                               not has_verification, not has_confirmation))
+            # 代码不降级，只标出"这一步没做完"，仍进待确认
             sg["needsCheck"] = True
+            missing = []
+            if not has_verification:
+                missing.append("验证过程")
+            if not has_confirmation:
+                missing.append("确认结论")
+            sg.setdefault("evidence", []).append(
+                "AI 未给出" + "、".join(missing))
+        else:
+            # AI 自己确认过 → 按它说的记录，不做二次判断
+            sg["needsCheck"] = not bool(conf.get("holds"))
+
         applied += 1
 
-    return applied, missed
+    if incomplete:
+        print(f"  {len(incomplete)} 条判断的验证/确认不完整：", file=sys.stderr)
+        for parent, group, no_ver, no_conf in incomplete[:10]:
+            bits = []
+            if no_ver:
+                bits.append("无验证")
+            if no_conf:
+                bits.append("无确认")
+            print(f"    {parent} / {group}　{'、'.join(bits)}", file=sys.stderr)
 
+    return applied, missed
 
 def main():
     _boot_rules()

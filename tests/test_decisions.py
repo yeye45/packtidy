@@ -345,61 +345,112 @@ class TestBuildQuestion(unittest.TestCase):
 
 
 class TestApplyAnswers(unittest.TestCase):
-    def _nodes(self):
-        return [{
-            "name": "父A",
-            "groups": [
-                {"name": "组一", "suggest": {"mode": "keep", "needsCheck": True}},
-                {"name": "组二", "suggest": {"mode": "keep", "needsCheck": True}},
-            ],
-        }]
+    """AI 自己走 猜想→验证→确认，代码只记录。"""
 
-    def test_applies_high_confidence(self):
+    def _nodes(self, n=5):
+        return [{"name": "P", "groups": [
+            {"name": f"G{i}", "suggest": {"mode": "keep", "needsCheck": True}}
+            for i in range(n)]}]
+
+    def _write(self, answers):
         import json, tempfile
-        nodes = self._nodes()
-        ans = {"answers": [{"parent": "父A", "group": "组一",
-                            "category": "study", "label": "学习资料",
-                            "confidence": "high", "evidence": "课程视频"}]}
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
                                          encoding="utf-8") as f:
-            json.dump(ans, f, ensure_ascii=False)
-            path = f.name
-        applied, missed = D.apply_answers(nodes, path)
-        self.assertEqual(applied, 1)
-        self.assertEqual(missed, 0)
-        g = nodes[0]["groups"][0]
-        self.assertEqual(g["suggest"]["aiJudgement"]["label"], "学习资料")
-        self.assertFalse(g["suggest"]["needsCheck"])   # high → 不再待确认
+            json.dump({"answers": answers}, f, ensure_ascii=False)
+            return f.name
+
+    def test_full_flow_passes(self):
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "G0", "category": "voice_synth",
+            "label": "歌声合成", "hypothesis": "怀疑是成品音乐",
+            "verification": {"method": "查 DLsite", "findings": "是声库",
+                             "disproved": ["按名字归音乐是错的"]},
+            "confirmation": {"holds": True, "confidence": "high",
+                             "why": "验证推翻了初猜", "residualRisk": "无"}}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][0]["suggest"]
+        self.assertFalse(g["needsCheck"])
+        j = g["aiJudgement"]
+        self.assertEqual(j["hypothesis"], "怀疑是成品音乐")
+        self.assertIn("DLsite", j["verification"]["method"])
+        self.assertTrue(j["confirmation"]["holds"])
         os.unlink(path)
 
-    def test_low_confidence_stays_pending(self):
-        import json, tempfile
+    def test_missing_verification_pending(self):
         nodes = self._nodes()
-        ans = {"answers": [{"parent": "父A", "group": "组一",
-                            "category": "x", "label": "X",
-                            "confidence": "low"}]}
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
-                                         encoding="utf-8") as f:
-            json.dump(ans, f, ensure_ascii=False)
-            path = f.name
+        path = self._write([{
+            "parent": "P", "group": "G1", "category": "x", "label": "X",
+            "confirmation": {"holds": True, "confidence": "high",
+                             "why": "我觉得"}}])
         D.apply_answers(nodes, path)
-        self.assertTrue(nodes[0]["groups"][0]["suggest"]["needsCheck"])
+        g = nodes[0]["groups"][1]["suggest"]
+        self.assertTrue(g["needsCheck"])
+        self.assertTrue(any("验证过程" in e for e in g.get("evidence", [])))
+        os.unlink(path)
+
+    def test_missing_confirmation_pending(self):
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "G2", "category": "x", "label": "X",
+            "verification": {"method": "查了", "findings": "是"}}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][2]["suggest"]
+        self.assertTrue(g["needsCheck"])
+        self.assertTrue(any("确认结论" in e for e in g.get("evidence", [])))
+        os.unlink(path)
+
+    def test_ai_says_not_holds(self):
+        """AI 自己确认'站不住'——代码尊重它的结论。"""
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "G3", "category": "x", "label": "X",
+            "hypothesis": "猜是A", "verification": {"method": "查了",
+                                                    "findings": "是B不是A",
+                                                    "disproved": ["A"]},
+            "confirmation": {"holds": False, "confidence": "low",
+                             "why": "验证推翻了", "residualRisk": "还需人看"}}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][3]["suggest"]
+        self.assertTrue(g["needsCheck"], "AI 说站不住 → 保持待确认")
+        self.assertFalse(g["aiJudgement"]["confirmation"]["holds"])
+        os.unlink(path)
+
+    def test_code_does_not_downgrade_confidence(self):
+        """代码不替 AI 降级——记录原值。"""
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "G4", "category": "x", "label": "X",
+            "verification": {"method": "查了", "findings": "是"},
+            "confirmation": {"holds": True, "confidence": "medium",
+                             "why": "大概吧", "residualRisk": "细节不确定"}}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][4]["suggest"]
+        # 代码如实记录 medium，不因为缺东西改成 low
+        self.assertEqual(g["aiJudgement"]["confirmation"]["confidence"],
+                         "medium")
         os.unlink(path)
 
     def test_unmatched_reported(self):
-        import json, tempfile
         nodes = self._nodes()
-        ans = {"answers": [{"parent": "不存在的父", "group": "不存在的组",
-                            "category": "x", "label": "X",
-                            "confidence": "high"}]}
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
-                                         encoding="utf-8") as f:
-            json.dump(ans, f, ensure_ascii=False)
-            path = f.name
+        path = self._write([{"parent": "不存在", "group": "也没有",
+                             "category": "x", "label": "X"}])
         applied, missed = D.apply_answers(nodes, path)
         self.assertEqual(applied, 0)
         self.assertEqual(missed, 1)
         os.unlink(path)
+
+
+class TestQuestionPackage(unittest.TestCase):
+    def test_requires_three_steps(self):
+        sug = {"mode": "keep", "reason": "x", "evidence": []}
+        q = D.build_ai_question("g", "p", "/x", sug, None, [],
+                                trigger="no_rule_match")
+        ro = q["requiredOutput"]
+        self.assertIn("hypothesis", ro["fields"])
+        self.assertIn("verification", ro["fields"])
+        self.assertIn("confirmation", ro["fields"])
+        self.assertIn("holds", ro["fields"]["confirmation"])
 
 
 if __name__ == "__main__":
