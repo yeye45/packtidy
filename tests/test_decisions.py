@@ -632,5 +632,82 @@ class TestPolicyMapping(unittest.TestCase):
         self.assertFalse(missing, f"CATEGORY_KEYS 缺: {missing}")
 
 
+
+
+class TestUiUnitList(unittest.TestCase):
+    """ui._unit_list —— units 可能是数组也可能只是计数。"""
+
+    def test_list_passthrough(self):
+        import ui
+        r = ui._unit_list({"units": ["a", "b", "c"]})
+        self.assertEqual(r, ["a", "b", "c"])
+
+    def test_int_becomes_placeholders(self):
+        import ui
+        r = ui._unit_list({"units": 3})
+        self.assertEqual(len(r), 3)
+        self.assertTrue(all("第" in x for x in r))
+
+    def test_missing_returns_empty(self):
+        import ui
+        self.assertEqual(ui._unit_list({}), [])
+        self.assertEqual(ui._unit_list({"units": None}), [])
+
+    def test_long_list_truncated(self):
+        import ui
+        r = ui._unit_list({"units": [f"u{i}" for i in range(200)]})
+        self.assertLessEqual(len(r), 60)
+
+    def test_very_long_name_truncated(self):
+        import ui
+        r = ui._unit_list({"units": ["x" * 500]})
+        self.assertLessEqual(len(r[0]), 200)
+
+
+class TestUiLoadsRules(unittest.TestCase):
+    """ui.py 必须加载规则包，否则建议全线失效。"""
+
+    def test_ui_imports_rules(self):
+        import inspect
+        import ui
+        src = inspect.getsource(ui.main)
+        self.assertIn("rules", src, "ui.main 应加载规则包")
+        self.assertIn("apply_to", src, "ui.main 应应用规则包")
+
+    def test_ui_applies_policy_mapping(self):
+        import inspect
+        import ui
+        src = inspect.getsource(ui.main)
+        self.assertIn("load_policy_mapping", src,
+                      "ui.main 应应用 policy.json 的 mapping")
+
+
+class TestSuggestNotAllKeep(unittest.TestCase):
+    """有规则包时，suggest 不能全部返回 keep。"""
+
+    def test_mixed_modes_with_rules(self):
+        saved = [dict(r) for r in D.CROSS_RULES]
+        saved_nodes = set(D.CATEGORY_NODE_NAMES)
+        try:
+            D.CROSS_RULES = [
+                {"keys": ["课程", "教程"], "to": ["学习资料"]},
+                {"keys": ["游戏"], "to": ["游戏"]},
+            ]
+            D.CATEGORY_NODE_NAMES = set()
+            zones = [
+                {"path": "/x/学习资料", "label": "学习资料", "depth": 1, "files": 10},
+                {"path": "/x/游戏", "label": "游戏", "depth": 1, "files": 10},
+            ]
+            modes = set()
+            for name in ["编程课程", "某个游戏", "随便什么"]:
+                r = D.suggest_group(name, "下载", zones)
+                modes.add(r["mode"])
+            self.assertGreater(len(modes), 1,
+                               f"应返回多种 mode，实际只有 {modes}")
+        finally:
+            D.CROSS_RULES = saved
+            D.CATEGORY_NODE_NAMES = saved_nodes
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

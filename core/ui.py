@@ -58,6 +58,17 @@ def unit_num(item):
     return 0
 
 
+def _unit_list(item):
+    """取组的单元列表。units 可能是数组，也可能是个计数。"""
+    v = item.get("units")
+    if isinstance(v, list):
+        return [str(u)[:200] for u in v][:60]
+    if isinstance(v, int) and v > 0:
+        # 只有数量，没有具体名字——造占位
+        return [f"（第 {i+1} 项，名称未记录）" for i in range(min(v, 60))]
+    return []
+
+
 def _suggest_view(sg):
     """把 suggest 整理成界面能直接用的样子。
 
@@ -113,6 +124,9 @@ def build_model(root, probes, units, groups):
                 "relation": x.get("relation", ""),
                 "confidence": x.get("confidence", ""),
                 "n": unit_num(x),
+                # 单元列表——拆组时要知道具体是哪几项
+                # units 可能是数组，也可能只是个计数（int）
+                "units": _unit_list(x),
                 # AI 判断链（有就带，没有为空）
                 "ai": (x.get("suggest") or {}).get("aiJudgement") or None,
                 "suggest": _suggest_view(x.get("suggest")),
@@ -824,6 +838,26 @@ def main():
     probe_dir = Path(args.probe) if args.probe else Path(root) / '_organize' / 'probe'
 
     import decisions as dec_mod
+
+    # 加载规则包——不加载的话 CROSS_RULES 是空的，
+    # 所有组都会 fallback 到 keep，整个建议机制形同虚设。
+    # 和 decisions.py 的 _boot_rules 保持一致。
+    try:
+        import rules as rules_mod
+        _pack = rules_mod.load()
+        if not _pack.get("_missing"):
+            rules_mod.apply_to(_pack, decisions_mod=dec_mod)
+    except Exception as _e:
+        print(f"规则包加载失败，建议可能不准: {type(_e).__name__}",
+              file=sys.stderr)
+
+    # policy.json 的 mapping（S0 前置确认的产物）也要应用
+    try:
+        _mapping, _setup = dec_mod.load_policy_mapping(root)
+        if _mapping:
+            dec_mod.apply_policy_mapping(_mapping)
+    except Exception:
+        pass
 
     probes, units, groups = load_probes(probe_dir)
     nodes = build_model(root, probes, units, groups)
