@@ -495,6 +495,113 @@ python core/decisions.py --root /path --answers ai.json
 
 ---
 
+## 验证：判据对不对，得能验
+
+单元测试验"函数对不对"，验证验"判断准不准"。**两回事。**
+
+函数可以全对，但组合起来的判断仍可能错——
+VOCALOID 那个案例里，`name_stem` 和 `content_shape` 都没问题，
+是"信名字还是信内容"这个组合决策错了。
+
+### 三类用例
+
+```json
+{"kind": "stem",    "name": "编程课程合集", "expect": "编程课程"}
+{"kind": "shape",   "path": "/x/某目录",   "expect": "installer"}
+{"kind": "suggest", "group": "音源合集", "parent": "下载",
+                    "expectMode": "move", "expectNeedsCheck": true}
+```
+
+```bash
+python core/verify.py run cases/ --verbose
+python core/verify.py coverage /path/to/root
+```
+
+### 覆盖统计比通过率有用
+
+```bash
+python core/verify.py coverage /path
+#   总组数        22
+#   已匹配        8  (36%)
+#   未匹配        0  (0%)
+#   需人工/AI     3  (14%)
+#
+#   未匹配的组（这些是规则包该补的）:
+#     某工具A · 某工具B · ...
+```
+
+**"已匹配 36%"说明规则包覆盖不足，这是要补的信号**，
+不是测试失败。覆盖统计告诉你该往哪补。
+
+### 从真实判断生成用例
+
+```bash
+python core/verify.py record /path out.json
+```
+
+**注意：这是当前判断的快照，不等于正确。** 要作为回归基准，
+必须先人工核对一遍——把判断错的用例改对，再存进 `cases/`。
+
+---
+
+## 查询：拿不准就查，不猜
+
+**不确定就查证，不凭字面推断。**
+
+实测教训：VOCALOID 名字里有"音源"，归进了"音乐"。
+查证后发现它是歌声合成引擎 + 声库，是工具不是成品。
+
+### 代码在生成问题时就附上查询线索
+
+```json
+{
+  "group": "RJ123456 某作",
+  "lookupHint": {"source": "dlsite", "key": "RJ123456",
+                 "note": "RJ 号作品，查 DLsite 能拿到官方分类"}
+}
+{
+  "group": "某视觉小说",
+  "lookupHint": {"source": "vndb", "key": "某视觉小说",
+                 "command": "python core/lookup.py vndb "某视觉小说""}
+}
+{
+  "group": "某软件合集",
+  "lookupHint": {"source": "software",
+                 "note": "内容是安装包，可能是软件或工具，不是作品"}
+}
+```
+
+**线索不是结论。** 它告诉 AI 该去哪查，不告诉它答案。
+
+### 数据源
+
+| 源 | 能查什么 | 可靠度 |
+|---|---|---|
+| VNDB | 视觉小说：标题、标签、成人分级 | 高 |
+| DLsite | RJ 号作品：分类、年龄分级 | 高 |
+
+```bash
+python core/lookup.py sources
+python core/lookup.py vndb "Fate Stay Night"
+python core/lookup.py search "某东西"        # 只给途径，不给结论
+python core/lookup.py batch questions.json --out resolved.json
+```
+
+**刻意不内置搜索引擎。** 信任谁由使用者决定——
+查询能力用来消除歧义，不是用来替代判断。
+
+### 约束
+
+```
+× 不上传文件内容     只查公开的元数据（标题、分类、分级）
+× 不把查询当结论     查到的是参考，仍要结合内容形态判断
+× 查不到不补猜测     返回 found: false，由 AI 说"不知道"
+✓ 结果带来源         可复核：哪来的、什么时候查的
+✓ 缓存 30 天         避免重复查询
+```
+
+---
+
 ## 清理「收押区」时的强制流程
 
 移进 `_待删除/` 不等于删除。真正删掉之前，必须走这一步。
