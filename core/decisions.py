@@ -523,33 +523,7 @@ def build_ai_question(group_name, node_name, node_path, suggest,
             "evidence": suggest.get("evidence") or [],
         },
         "question": _ai_question_text(suggest, shape, trigger),
-        "lookupHint": _lookup_hint(group_name, shape),
     }
-
-
-def _lookup_hint(group_name, shape=None):
-    """给 AI 一个查询线索——该去哪查，查什么。
-
-    不是结论，是"如果拿不准，可以查这里"。
-    """
-    import re
-    rj = re.search(r"RJ\d{6,8}", group_name, re.I)
-    if rj:
-        return {"source": "dlsite", "key": rj.group(0).upper(),
-                "note": "RJ 号作品，查 DLsite 能拿到官方分类与年龄分级"}
-
-    kind = (shape or {}).get("kind")
-    if kind in ("media", "image"):
-        return {"hint": "可能是作品，建议查 VNDB / Steam / Bangumi",
-                "command": f'python core/lookup.py suggest "{group_name}" --shape media'}
-    if kind == "installer":
-        return {"hint": "内容是安装包，可能是软件或工具，不是作品",
-                "command": f'python core/lookup.py suggest "{group_name}" --shape installer'}
-    if kind == "code":
-        return {"hint": "内容是源码，可能是开源项目",
-                "command": f'python core/lookup.py suggest "{group_name}" --shape code'}
-    return {"hint": "名字有歧义时查证，不按字面推断",
-            "command": f'python core/lookup.py suggest "{group_name}"'}
 
 
 def _ai_question_text(suggest, shape=None, trigger=None):
