@@ -161,7 +161,11 @@ def apply_to(data, safety_mod=None, decisions_mod=None):
                 changed.append(f"decisions.CROSS_RULES(v2, {len(cross)}条)")
 
             # 有映射名字的当作 categoryNodes
-            nodes = {m for m in mapping.values() if isinstance(m, str)}
+            # 跳过 _comment 之类的下划线键，它们不是真映射
+            nodes = {
+                m for k, m in mapping.items()
+                if not k.startswith("_") and isinstance(m, str) and m.strip()
+            }
             if nodes:
                 decisions_mod.CATEGORY_NODE_NAMES = nodes
                 changed.append("decisions.CATEGORY_NODE_NAMES(v2)")

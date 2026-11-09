@@ -83,6 +83,67 @@ empty       → 0 文件空壳
 
 ---
 
+## 分级：S2 一律 full
+
+**判断边界错一次代价很大**，所以每个单元的判定都要走完三步。
+
+```
+拆错边界
+  → Unity 游戏的 7 个必需件被撕到 3 个目录
+  → 游戏废了
+```
+
+这不是"稍微乱一点"，是"东西没了"。
+
+### 三步怎么填
+
+```json
+{
+  "path": "/disk/某目录",
+  "hypothesis": "这里有 5 个最小单元",
+
+  "verification": {
+    "method": "逐个看：A 有 exe + 同名 _Data + saves/，是 Unity 整块；
+               B/C/D 是独立安装包，各有 setup.exe；
+               E 是空壳目录，0 文件",
+    "findings": "确认 5 个单元，其中空壳不算单元",
+    "disproved": ["最初把空壳也算了一个，实际它没有内容"]
+  },
+
+  "confirmation": {
+    "holds": true,
+    "confidence": "high",
+    "why": "每个单元都验了绑定信号",
+    "residualRisk": "没验 4 个 zip 之间是否有分卷关系"
+  }
+}
+```
+
+### 空壳和套壳要特别小心
+
+**实测踩过**：判断"内层同名目录只是传输壳"是错的。
+
+```json
+{
+  "hypothesis": "内层同名目录只是传输壳",
+  "verification": {
+    "method": "实际 ls 了内层，数了文件数",
+    "findings": "内层有 40 个文件，与外层完全重复",
+    "disproved": ["最初以为是空壳——没 ls 就下了结论"]
+  },
+  "confirmation": {
+    "holds": true,
+    "confidence": "high",
+    "why": "内外逐文件比过哈希",
+    "residualRisk": "没比 mtime，可能有覆盖"
+  }
+}
+```
+
+**"内层是空壳"这个判断必须实际 ls 过内层，不能从体积推算。**
+
+---
+
 ## 输出
 
 ```json

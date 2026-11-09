@@ -150,6 +150,69 @@ def cmd_ui(args):
         sys.argv = old
 
 
+def cmd_decisions(args):
+    dec = _load("decisions", "decisions.py")
+    argv = ["--root", args.root]
+    if args.need_ai:
+        argv.append("--need-ai")
+    if args.answers:
+        argv += ["--answers", args.answers]
+    if args.out:
+        argv += ["--out", args.out]
+    if args.probe:
+        argv += ["--probe", args.probe]
+    old = sys.argv
+    sys.argv = ["decisions"] + argv
+    try:
+        return dec.main()
+    finally:
+        sys.argv = old
+
+
+def cmd_verify(args):
+    ver = _load("verify", "verify.py")
+    if args.action == "run":
+        argv = ["run", args.path or "cases/"]
+        if args.verbose:
+            argv.append("--verbose")
+    elif args.action == "record":
+        if not args.root or not args.out:
+            sys.exit("record 需要 --root 和 --out")
+        argv = ["record", args.root, args.out]
+    else:  # coverage
+        if not args.root:
+            sys.exit("coverage 需要 --root")
+        argv = ["coverage", args.root]
+    old = sys.argv
+    sys.argv = ["verify"] + argv
+    try:
+        return ver.main(argv)
+    finally:
+        sys.argv = old
+
+
+def cmd_rules(args):
+    r = _load("rules", "rules.py")
+    if args.action == "show":
+        argv = ["show"]
+        if args.file:
+            argv += ["--file", args.file]
+    elif args.action == "check":
+        if not args.file:
+            sys.exit("check 需要 --file")
+        argv = ["check", args.file]
+    else:  # sync
+        argv = ["sync"]
+        if args.url:
+            argv += ["--url", args.url]
+    old = sys.argv
+    sys.argv = ["rules"] + argv
+    try:
+        return r.main(argv)
+    finally:
+        sys.argv = old
+
+
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -203,6 +266,29 @@ def main(argv=None):
     s = sub.add_parser("recover", help="中断恢复")
     s.add_argument("root")
     s.set_defaults(func=cmd_recover)
+
+    s = sub.add_parser("decisions", help="算建议 / 生成 AI 问题 / 回填答案")
+    s.add_argument("root")
+    s.add_argument("--probe")
+    s.add_argument("--out")
+    s.add_argument("--need-ai", action="store_true",
+                   help="只输出需要 AI 判断的问题清单")
+    s.add_argument("--answers", help="AI 判断结果 JSON，回填")
+    s.set_defaults(func=cmd_decisions)
+
+    s = sub.add_parser("verify", help="回归验证")
+    s.add_argument("action", choices=("run", "record", "coverage"))
+    s.add_argument("path", nargs="?", help="run 时的用例路径")
+    s.add_argument("--root", help="record/coverage 的盘根")
+    s.add_argument("--out", help="record 的输出文件")
+    s.add_argument("--verbose", action="store_true")
+    s.set_defaults(func=cmd_verify)
+
+    s = sub.add_parser("rules", help="规则包")
+    s.add_argument("action", choices=("show", "check", "sync"))
+    s.add_argument("--file")
+    s.add_argument("--url")
+    s.set_defaults(func=cmd_rules)
 
     s = sub.add_parser("ui", help="生成决策界面")
     s.add_argument("root")

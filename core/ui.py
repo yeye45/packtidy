@@ -58,6 +58,38 @@ def unit_num(item):
     return 0
 
 
+def _suggest_view(sg):
+    """把 suggest 整理成界面能直接用的样子。
+
+    move 用的是 target（路径），new 用的是 newName（类别名），
+    两者合并成一个 target 字段，外加 targetLabel 供显示。
+    """
+    if not sg:
+        return None
+    mode = sg.get("mode")
+    if mode == "move":
+        target = sg.get("target") or ""
+        target_label = sg.get("targetLabel") or ""
+    elif mode == "new":
+        target = "__new__"
+        target_label = sg.get("newName") or ""
+    elif mode == "keep":
+        target = "__keep__"
+        target_label = "保持原位"
+    else:
+        target = ""
+        target_label = ""
+    return {
+        "mode": mode,
+        "target": target,
+        "targetLabel": target_label,
+        "newParent": sg.get("newParent"),
+        "needsCheck": bool(sg.get("needsCheck")),
+        "evidence": sg.get("evidence") or [],
+        "reason": sg.get("reason") or "",
+    }
+
+
 def build_model(root, probes, units, groups):
     nodes = []
     for path in sorted(set(probes) | set(units) | set(groups)):
@@ -81,6 +113,9 @@ def build_model(root, probes, units, groups):
                 "relation": x.get("relation", ""),
                 "confidence": x.get("confidence", ""),
                 "n": unit_num(x),
+                # AI 判断链（有就带，没有为空）
+                "ai": (x.get("suggest") or {}).get("aiJudgement") or None,
+                "suggest": _suggest_view(x.get("suggest")),
             } for x in (g.get("groups") or [])],
             "solo_n": len(g.get("solo_units") or []),
             "uncertain_n": len(g.get("uncertain") or []),
@@ -194,6 +229,10 @@ code,.mono,.num{font-family:var(--mono)}
 .needitem:last-child{border-bottom:0}
 .needitem .nm{font-size:13px;font-weight:600;margin-bottom:3px}
 .needitem .ds{font-size:12px;color:var(--fg2);line-height:1.55}
+.kv{display:flex;gap:10px;padding:2px 0;font-size:11.5px;line-height:1.55}
+.kv i{font-style:normal;color:var(--fg3);flex:0 0 34px;font-family:var(--mono)}
+.kv span{color:var(--fg2);flex:1;word-break:break-word}
+.kv span b{color:var(--accent);font-weight:600}
 .needitem .ds em{font-style:normal;color:var(--accent);font-weight:500;
   display:block;margin-top:4px}
 
@@ -376,18 +415,26 @@ BODY = r"""
 
 JS = r"""
 const DATA = __DATA__;
-const KEY = 'fo-b5-' + DATA.root.replace(/[\\/:*?"<>|]/g,'_');
+const THEME_KEY = 'fo-theme';
+const DEC_KEY = 'fo-dec-' + DATA.root.replace(/[\\/:*?"<>|]/g,'_');
 
+/* 决策：key = "nodePath::idx" → {target, decided} */
 let dec = {};
-
-/* 待确认项的建议值由 generate 注入，不写死在模板里 */
-const FIXED = DATA.fixed || {};
 
 function esc(s){
   return String(s ?? '').replace(/[&<>"]/g,
     c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
+function label(p){
+  if(p === '__keep__') return '保持原位';
+  if(p === '__delete__') return '移到待删除';
+  const z = (DATA.zones || []).find(x =>
+    (typeof x === 'object' ? x.path : x) === p);
+  return z && typeof z === 'object' ? z.label : String(p).split(/[\\/]/).pop();
+}
+function gk(np, i){ return np + '::' + i; }
 
+/* 主题 */
 function syncBtn(){
   const t = document.documentElement.dataset.theme;
   const dark = t === 'dark' ||
@@ -399,36 +446,41 @@ document.getElementById('themeBtn').onclick = () => {
   const dark = t === 'dark' ||
     (!t && matchMedia('(prefers-color-scheme: dark)').matches);
   const next = dark ? 'light' : 'dark';
-  localStorage.setItem('fo-theme', next);
+  localStorage.setItem(THEME_KEY, next);
   document.documentElement.dataset.theme = next;
   syncBtn();
 };
 
+/* 初始化：默认全填好，只有需要确认的空着 */
 function init(){
-  DATA.u.forEach(it => {
-    if(FIXED[it.name]){
-      dec[it.path] = {target: FIXED[it.name].target};
-      return;
-    }
-    if(it.action === 'move') dec[it.path] = {target: it.target || ''};
-    else if(it.action === 'delete') dec[it.path] = {target: '__delete__'};
-    else if(it.action === 'keep') dec[it.path] = {target: '__keep__'};
-    else dec[it.path] = {target: ''};
+  (DATA.nodes || []).forEach(n => {
+    (n.groups || []).forEach((g, i) => {
+      const k = gk(n.path, i);
+      if(dec[k]) return;
+      const sg = g.suggest || {};
+      if(sg.mode === 'keep') dec[k] = {target: '__keep__'};
+      else if(sg.mode === 'move') dec[k] = {target: sg.target || ''};
+      else if(sg.mode === 'new') dec[k] = {target: '__new__'};
+      else dec[k] = {target: ''};
+    });
   });
-  DATA.pending.forEach(it => { dec['P:'+it.path] = {target: ''}; });
 }
 
+/* 统计 */
 function stats(){
-  let mv=0, dl=0, kp=0, need=0, fx=0;
-  DATA.u.forEach(it => {
-    const t = dec[it.path]?.target || '';
-    if(FIXED[it.name]) fx++;
-    if(!t) need++;
-    else if(t === '__delete__') dl++;
-    else if(t === '__keep__') kp++;
-    else mv++;
+  let total = 0, keep = 0, move = 0, del = 0, need = 0, withAI = 0;
+  (DATA.nodes || []).forEach(n => {
+    (n.groups || []).forEach((g, i) => {
+      const d = dec[gk(n.path, i)] || {};
+      total++;
+      if(g.ai) withAI++;
+      if(!d.target) need++;
+      else if(d.target === '__keep__') keep++;
+      else if(d.target === '__delete__') del++;
+      else move++;
+    });
   });
-  return {mv, dl, kp, need, fx};
+  return {total, keep, move, del, need, withAI};
 }
 
 function renderCore(){
@@ -438,21 +490,22 @@ function renderCore(){
   nEl.classList.toggle('zero', s.need === 0);
 
   document.getElementById('coreLbl').textContent =
-    s.need === 0 ? '全部已就绪' : '项需要你确认';
+    s.need === 0 ? '全部已就绪' : '组需要你确认';
 
-  let sub = `u 目录 <b>${DATA.u.length}</b> 项：` +
-            `<b>${s.mv}</b> 移到别处 · <b>${s.dl}</b> 待删除 · <b>${s.kp}</b> 不动。`;
-  if(s.fx) sub += `<br>其中 <b>${s.fx}</b> 项我已填好建议值，确认即可。`;
+  let sub = `共 <b>${s.total}</b> 组：` +
+            `<b>${s.keep}</b> 保持原位 · <b>${s.move}</b> 移到别处 · ` +
+            `<b>${s.del}</b> 待删除。`;
+  if(s.withAI) sub += `<br>其中 <b>${s.withAI}</b> 组有 AI 判断链，可点开看依据。`;
   document.getElementById('coreSub').innerHTML = sub;
 
   document.getElementById('coreCta').innerHTML =
     `<button class="btn" onclick="showList()">生成执行清单</button>` +
-    `<button class="btn gh" onclick="acceptAll()">全部采纳</button>`;
+    `<button class="btn gh" onclick="acceptAll()">全部采纳建议</button>`;
 
   renderProposals();
 }
 
-/* 候选类别：规则包没覆盖、但多个组共享特征的 */
+/* 候选类别 */
 function renderProposals(){
   const el = document.getElementById('proposals');
   if(!el) return;
@@ -461,10 +514,8 @@ function renderProposals(){
   if(!keys.length){ el.innerHTML = ''; return; }
 
   el.innerHTML = `
-    <div class="needcard" style="border-color:var(--new,#7c4dbd)">
-      <div class="hd" style="background:color-mix(in srgb,#7c4dbd 8%,var(--surface));
-           border-color:color-mix(in srgb,#7c4dbd 25%,var(--line));
-           color:var(--new,#7c4dbd)">
+    <div class="needcard" style="border-color:#7c4dbd">
+      <div class="hd" style="background:#7c4dbd14;border-color:#7c4dbd40;color:#7c4dbd">
         可能的候选类别　${keys.length} 个
       </div>
       ${keys.map(k => {
@@ -479,8 +530,7 @@ function renderProposals(){
             <div class="ds" style="color:var(--fg3);margin-top:3px">
               ${v.members.map(m => esc(m)).join('　·　')}
             </div>
-          </div>
-          <div></div>
+          </div><div></div>
         </div>`;
       }).join('')}
       <div style="padding:11px 16px;font-size:12px;color:var(--fg3);
@@ -491,197 +541,152 @@ function renderProposals(){
     </div>`;
 }
 
+/* AI 判断链 */
+function renderChain(ai){
+  if(!ai) return '';
+  const rows = [];
+  const kv = (k, v) => `<div class="kv"><i>${k}</i><span>${esc(v)}</span></div>`;
+
+  if(ai.verificationTier)
+    rows.push(kv('级别', ai.verificationTier));
+  if(ai.hypothesis)
+    rows.push(kv('猜想', ai.hypothesis));
+
+  const ver = ai.verification || {};
+  if(ver.method) rows.push(kv('验证', ver.method));
+  if(ver.findings) rows.push(kv('结果', ver.findings));
+  if(ver.disproved && ver.disproved.length)
+    rows.push(kv('推翻', ver.disproved.join('；')));
+
+  const conf = ai.confirmation || {};
+  if(conf.why || conf.holds !== undefined){
+    const mark = conf.holds === false ? '✗ 站不住' : '✓ 站得住';
+    rows.push(kv('确认', `${mark}　${conf.why || ''}　${conf.confidence || ''}`));
+  }
+  if(conf.residualRisk)
+    rows.push(kv('残余', conf.residualRisk));
+
+  return rows.length ? `<div class="det" style="display:block;margin-top:7px">${rows.join('')}</div>` : '';
+}
+
+/* 主渲染 */
 function render(){
   const main = document.getElementById('main');
   let html = '';
 
-  // ① 待确认
-  const needs = DATA.u.filter(it => FIXED[it.name] || !(dec[it.path]?.target));
+  // ① 需要确认的组
+  const needs = [];
+  (DATA.nodes || []).forEach(n => {
+    (n.groups || []).forEach((g, i) => {
+      const d = dec[gk(n.path, i)] || {};
+      const sg = g.suggest || {};
+      if(!d.target || sg.needsCheck) needs.push({n, g, i, d, sg});
+    });
+  });
+
   if(needs.length){
-    html += `<div class="needcard"><div class="hd">需要你确认　${needs.length} 项</div>`;
-    needs.forEach(it => {
-      const d = dec[it.path] || {};
-      const fx = FIXED[it.name];
-      const hasFiles = fx && fx.files && fx.files.length;
+    html += `<div class="needcard"><div class="hd">需要你确认　${needs.length} 组</div>`;
+    needs.forEach(({n, g, i, d, sg}) => {
+      const k = gk(n.path, i);
       html += `<div class="needitem">
         <div>
-          <div class="nm">${esc(it.name)}</div>
-          <div class="ds">${esc(fx ? fx.desc : it.desc)}
-            ${fx ? `<em>${esc(fx.note)}</em>` : ''}</div>
-          ${!hasFiles ? `<button class="pick${d.target?' has':''}" data-k="${esc(it.path)}"
-            style="margin-top:8px">
-            <span>${esc(targetLabel(d.target || ''))}</span>
-            <span class="caret">▾</span></button>` : ''}
+          <div class="nm">${esc(g.name)}</div>
+          <div class="ds">${esc(n.name)} · ${g.n} 项
+            ${g.why ? '· ' + esc(g.why.slice(0,60)) : ''}</div>
+          ${sg.evidence && sg.evidence.length ?
+            `<div class="ds" style="color:var(--fg3);margin-top:3px">
+               ${sg.evidence.map(esc).join('；')}</div>` : ''}
+          ${renderChain(g.ai)}
         </div>
-        ${!hasFiles ? '<div></div>' : '<div></div>'}
-        ${hasFiles ? renderFiles(it, fx) : ''}
+        <div>
+          <button class="pick${d.target?' has':''}" data-k="${esc(k)}"
+            onclick="openPanel(this.dataset.k)">
+            <span>${esc(d.target === '__new__' ? '＋ 新建类别' : label(d.target || ''))}</span>
+            <span class="caret">▾</span>
+          </button>
+        </div>
       </div>`;
     });
     html += '</div>';
   }
 
-  // ② 折叠组
+  // ② 折叠：按去向分组
   const fold = (title, items, fmt) => {
     if(!items.length) return '';
-    let h = `<div class="fold"><div class="fold-hd" onclick="this.parentElement.classList.toggle('open')">
-      <span class="t">${title}</span>
-      <span class="c">${items.length} 项</span>
+    let h = `<div class="fold"><div class="fold-hd"
+      onclick="this.parentElement.classList.toggle('open')">
+      <span class="t">${title}</span><span class="c">${items.length} 组</span>
       <span class="chev">›</span></div><div class="fold-bd">`;
     items.forEach(it => { h += fmt(it); });
     return h + '</div></div>';
   };
 
-  const isFixed = it => !!FIXED[it.name];
-  const tgt = it => dec[it.path]?.target || '';
+  const all = [];
+  (DATA.nodes || []).forEach(n => {
+    (n.groups || []).forEach((g, i) => {
+      all.push({n, g, i, d: dec[gk(n.path, i)] || {}});
+    });
+  });
 
-  html += fold('建议删除',
-    DATA.u.filter(it => !isFixed(it) && tgt(it) === '__delete__'),
-    it => `<div class="row">
-      <span class="n">${esc(it.name)}<span class="k">${esc(it.kind)}</span></span>
-      <span class="t err">${esc(it.desc)}</span>
-      <span class="sz">${it.gb} GB</span></div>`);
+  html += fold('保持原位',
+    all.filter(x => x.d.target === '__keep__').filter(x => !x.g.suggest?.needsCheck),
+    x => `<div class="row">
+      <span class="n">${esc(x.g.name)}<span class="k">${esc(x.n.name)}</span></span>
+      <span class="t">${x.g.n} 项</span>
+      <span class="sz"></span></div>`);
 
   html += fold('移到别处',
-    DATA.u.filter(it => !isFixed(it) && tgt(it) && tgt(it) !== '__delete__' && tgt(it) !== '__keep__'),
-    it => `<div class="row">
-      <span class="n">${esc(it.name)}<span class="k">${esc(it.kind)}</span></span>
-      <span class="t acc">→ ${esc(shortPath(tgt(it)))}</span>
-      <span class="sz">${it.gb} GB</span></div>`);
+    all.filter(x => x.d.target && x.d.target !== '__keep__'
+                    && x.d.target !== '__delete__' && x.d.target !== '__new__'),
+    x => `<div class="row">
+      <span class="n">${esc(x.g.name)}<span class="k">${esc(x.n.name)}</span></span>
+      <span class="t acc">→ ${esc(label(x.d.target))}</span>
+      <span class="sz">${x.g.n} 项</span></div>`);
 
-  html += fold('保持不动',
-    DATA.u.filter(it => !isFixed(it) && tgt(it) === '__keep__'),
-    it => `<div class="row">
-      <span class="n">${esc(it.name)}<span class="k">${esc(it.kind)}</span></span>
-      <span class="t">${esc(it.desc.slice(0,36))}</span>
-      <span class="sz">${it.gb} GB</span></div>`);
-
-  // ③ 待删除区
-  if(DATA.pending.length){
-    html += `<div class="fold open"><div class="fold-hd" onclick="this.parentElement.classList.toggle('open')">
-      <span class="t">待删除区</span>
-      <span class="c">${DATA.pending.length} 项 · ${DATA.summary.pendingGB} GB</span>
-      <span class="chev">›</span></div><div class="fold-bd">`;
-    DATA.pending.forEach(it => {
-      const v = dec['P:'+it.path]?.target || '';
-      html += `<div class="row">
-        <span class="n">${esc(it.name)}</span>
-        <button class="pick${v?' has':''}" data-k="P:${esc(it.path)}"
-          style="flex:0 0 140px">${v==='__delete__'?'确认删除':'留在待删除'}</button>
-        <span class="sz">${it.gb} GB</span></div>`;
-    });
-    html += '</div></div>';
-  }
+  html += fold('移到待删除',
+    all.filter(x => x.d.target === '__delete__'),
+    x => `<div class="row">
+      <span class="n">${esc(x.g.name)}<span class="k">${esc(x.n.name)}</span></span>
+      <span class="t err">待删除</span>
+      <span class="sz">${x.g.n} 项</span></div>`);
 
   main.innerHTML = html;
-  main.querySelectorAll('.pick').forEach(el => {
-    el.onclick = () => {
-      if(el.dataset.fk) openPanel(el.dataset.fk);
-      else openPanel(el.dataset.k);
-    };
-  });
 }
 
-function renderFiles(it, fx){
-  if(!fileDec[it.path]){
-    fileDec[it.path] = {};
-    fx.files.forEach(f => { fileDec[it.path][f.name] = f.to; });
-  }
-  const cur = fileDec[it.path];
-  let h = `<div class="filelist">`;
-  fx.files.forEach(f => {
-    const v = cur[f.name] || '';
-    const isDup = f.dup;
-    h += `<div class="frow">
-      <span class="fn">${esc(f.name.length > 56 ? f.name.slice(0,54)+'…' : f.name)}
-        <span class="fs">${esc(f.size)}</span>
-        ${isDup ? `<span class="dup">⚠ ${esc(f.dup)}</span>` : (f.hint ? `<span class="fs">${esc(f.hint)}</span>` : '')}
-      </span>
-      <button class="pick sm${v?' has':''}"
-        data-fk="${esc(it.path)}||${esc(f.name)}">
-        <span>${esc(targetLabel(v))}</span><span class="caret">▾</span>
-      </button>
-    </div>`;
-  });
-  return h + '</div>';
-}
-
-function shortPath(p){
-  if(p === '__split__') return '拆开归位';
-  if(p === '__merge__') return '合并';
-  const z = (DATA.zones||[]).find(x => (typeof x === 'object' ? x.path : x) === p);
-  return z && typeof z === 'object' ? z.label : String(p).split(/[\\/]/).pop();
-}
-
+/* 选择面板 */
 let panelKey = null;
 
-function targetLabel(v){
-  if(!v) return '— 请选择 —';
-  if(v === '__split__') return '拆开归位（建议）';
-  if(v === '__merge__') return '合并（建议）';
-  if(v === '__keep__') return '保持原位';
-  if(v === '__delete__') return '移到待删除';
-  return shortPath(v);
-}
-
-function openPanel(key){
-  panelKey = key;
+function openPanel(k){
+  panelKey = k;
   document.getElementById('pq').value = '';
   renderPanel('');
   document.getElementById('panel').classList.add('on');
   setTimeout(() => document.getElementById('pq').focus(), 50);
 }
-
 function closePanel(){
   document.getElementById('panel').classList.remove('on');
   panelKey = null;
 }
-
 function choose(v){
-  if(panelKey){
-    if(panelKey.indexOf('||') >= 0){
-      const [p, f] = panelKey.split('||');
-      if(!fileDec[p]) fileDec[p] = {};
-      fileDec[p][f] = v;
-    } else {
-      dec[panelKey] = {target: v};
-    }
-    save();
-    render(); renderCore(); renderStatus();
-  }
-  closePanel();
+  if(panelKey){ dec[panelKey] = {target: v}; save(); }
+  closePanel(); render(); renderCore(); renderStatus();
 }
 
 function renderPanel(q){
   const list = document.getElementById('plist');
-  let cur = '';
-  if(panelKey && panelKey.indexOf('||') >= 0){
-    const [p, f] = panelKey.split('||');
-    cur = (fileDec[p] || {})[f] || '';
-  } else {
-    cur = dec[panelKey]?.target || '';
-  }
+  const cur = dec[panelKey]?.target || '';
   const lower = q.toLowerCase();
   const hit = t => !q || t.toLowerCase().indexOf(lower) >= 0;
 
   let h = '';
-
-  // 建议项
-  const fixed = (DATA.u||[]).find(it => it.path === panelKey);
-  const sug = fixed ? FIXED[fixed.name] : null;
-  if(sug && hit('建议')){
-    h += `<div class="pitem${cur===sug.target?' on':''}" onclick="choose('${sug.target}')">
-      <span class="ck">${cur===sug.target?'✓':''}</span>★ ${esc(targetLabel(sug.target))}</div>`;
-  }
-
-  // 通用选项
   [['__keep__','保持原位'], ['__delete__','移到待删除']].forEach(([v,t]) => {
-    if(hit(t)) h += `<div class="pitem${cur===v?' on':''}" onclick="choose('${v}')">
+    if(hit(t)) h += `<div class="pitem${cur===v?' on':''}"
+      onclick="choose('${v}')">
       <span class="ck">${cur===v?'✓':''}</span>${t}</div>`;
   });
 
-  // 按一级分组
   const byTop = {};
-  (DATA.zones||[]).forEach(z => {
+  (DATA.zones || []).forEach(z => {
     const zp = (typeof z === 'string') ? z : z.path;
     const zl = (typeof z === 'string') ? zp : (z.label || z.path);
     const depth = (typeof z === 'string') ? 1 : (z.depth || 1);
@@ -690,58 +695,48 @@ function renderPanel(q){
   });
 
   Object.keys(byTop).sort().forEach(top => {
-    const all = byTop[top];
-    const self = all.find(x => x.depth === 1);
-    const subs = all.filter(x => x.depth > 1);
-
-    // 一级目录本身作为可选项
-    const selfHit = self && (hit(top));
-    const subHit = subs.filter(z => hit(z.label));
-
-    if(!selfHit && !subHit.length) return;
-
-    // 只有存在子目录时才打分组头，否则直接列一项
-    if(selfHit && subs.length) h += `<div class="pgroup">${esc(top)}</div>`;
-    if(selfHit){
-      h += `<div class="pitem${cur===self.path?' on':''}"
-        onclick="choose(this.dataset.p)" data-p="${esc(self.path)}">
-        <span class="ck">${cur===self.path?'✓':''}</span>${esc(top)}</div>`;
-    }
-    subHit.forEach(z => {
-      const name = z.label.split('/').slice(1).join('/');
+    const items = byTop[top].filter(z => hit(z.label));
+    if(!items.length) return;
+    const self = items.find(x => x.depth === 1);
+    if(self) h += `<div class="pgroup">${esc(top)}</div>`;
+    if(self) h += `<div class="pitem${cur===self.path?' on':''}"
+      data-p="${esc(self.path)}" onclick="choose(this.dataset.p)">
+      <span class="ck">${cur===self.path?'✓':''}</span>${esc(top)}</div>`;
+    items.filter(x => x.depth > 1).forEach(z => {
       h += `<div class="pitem sub${cur===z.path?' on':''}"
-        onclick="choose(this.dataset.p)" data-p="${esc(z.path)}">
-        <span class="ck">${cur===z.path?'✓':''}</span>${esc(name)}</div>`;
+        data-p="${esc(z.path)}" onclick="choose(this.dataset.p)">
+        <span class="ck">${cur===z.path?'✓':''}</span>
+        ${esc(z.label.split('/').slice(1).join('/'))}</div>`;
     });
   });
 
-  if(!h) h = `<div class="pitem" style="color:var(--fg3)">没有匹配的目录</div>`;
-  list.innerHTML = h;
+  list.innerHTML = h || `<div class="pitem" style="color:var(--fg3)">没有匹配</div>`;
 }
 
+/* 操作 */
 function acceptAll(){
-  DATA.u.forEach(it => {
-    if(!dec[it.path]?.target) dec[it.path] = {target: '__keep__'};
+  Object.keys(dec).forEach(k => {
+    if(!dec[k].target) dec[k] = {target: '__keep__'};
   });
-  save(); renderCore(); render(); renderStatus();
+  save(); render(); renderCore(); renderStatus();
 }
 
 function showList(){
-  const mv=[], dl=[], kp=[], sp=[], mg=[];
-  DATA.u.forEach(it => {
-    const t = dec[it.path]?.target || '__keep__';
-    if(t === '__split__') sp.push(it.path);
-    else if(t === '__merge__') mg.push(it.path);
-    else if(t === '__delete__') dl.push(it.path);
-    else if(t === '__keep__') kp.push(it.path);
-    else mv.push(it.path + '  →  ' + t);
+  const mv = [], kp = [], dl = [];
+  (DATA.nodes || []).forEach(n => {
+    (n.groups || []).forEach((g, i) => {
+      const d = dec[gk(n.path, i)] || {};
+      const t = d.target || '__keep__';
+      if(t === '__keep__') kp.push(n.path + '\t' + g.name + '\t保持原位');
+      else if(t === '__delete__') dl.push(n.path + '\t' + g.name + '\t待删除');
+      else mv.push(n.path + '\t' + g.name + '\t' + t);
+    });
   });
-  let txt = `# 待办清单  ${DATA.generated}\n\n`;
+  let txt = `# 整理清单  ${DATA.generated}\n\n`;
   txt += `## 移到别处（${mv.length}）\n${mv.join('\n') || '（无）'}\n\n`;
-  txt += `## 拆开归位（${sp.length}）\n${sp.join('\n') || '（无）'}\n\n`;
-  txt += `## 合并（${mg.length}）\n${mg.join('\n') || '（无）'}\n\n`;
   txt += `## 移到待删除（${dl.length}）\n${dl.join('\n') || '（无）'}\n\n`;
-  txt += `## 保持不动（${kp.length}）\n${kp.map(x=>'  '+x).join('\n')}\n`;
+  txt += `## 保持原位（${kp.length}）\n${kp.slice(0,50).join('\n')}`;
+  if(kp.length > 50) txt += `\n…另有 ${kp.length - 50} 组`;
   document.getElementById('mTitle').textContent = '执行清单';
   document.getElementById('mBody').textContent = txt;
   document.getElementById('mask').classList.add('on');
@@ -749,47 +744,57 @@ function showList(){
 function closeM(){ document.getElementById('mask').classList.remove('on'); }
 
 function save(){
-  try{ localStorage.setItem(KEY, JSON.stringify({dec, fileDec, at:Date.now()})); }catch(e){}
+  try{ localStorage.setItem(DEC_KEY, JSON.stringify({dec, at:Date.now()})); }catch(e){}
 }
 function load(){
   try{
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(DEC_KEY);
     if(!raw) return false;
     const o = JSON.parse(raw);
     if(!o || !o.at || Date.now()-o.at > 30*864e5) return false;
     dec = o.dec || {};
-    fileDec = o.fileDec || {};
     return Object.keys(dec).length > 0;
   }catch(e){ return false; }
 }
 
 function renderStatus(){
   const s = stats();
-  document.getElementById('stA').innerHTML = `u: <b>${DATA.u.length}</b> 项`;
+  document.getElementById('stA').innerHTML = `共 <b>${s.total}</b> 组`;
   document.getElementById('stB').innerHTML =
-    `移动 <b>${s.mv}</b> · 待删 <b>${s.dl}</b> · 不动 <b>${s.kp}</b>`;
+    `原位 <b>${s.keep}</b> · 移动 <b>${s.move}</b> · 待删 <b>${s.del}</b>`;
   document.getElementById('stC').innerHTML =
-    s.need ? `<b>${s.need}</b> 项待定` : '全部已定';
+    s.need ? `<b>${s.need}</b> 组待定` : '全部已定';
 }
 
-const th = localStorage.getItem('fo-theme');
+/* 对外接口：让 agent 能读状态 */
+window.foState = () => ({dec, stats: stats()});
+window.foPending = () => {
+  const out = [];
+  (DATA.nodes || []).forEach(n => {
+    (n.groups || []).forEach((g, i) => {
+      const d = dec[gk(n.path, i)] || {};
+      if(!d.target || g.suggest?.needsCheck)
+        out.push({node: n.name, group: g.name, target: d.target || null});
+    });
+  });
+  return out;
+};
+
+const th = localStorage.getItem(THEME_KEY);
 if(th) document.documentElement.dataset.theme = th;
 syncBtn();
 if(!load()) init();
-renderCore();
-render();
-renderStatus();
+render(); renderCore(); renderStatus();
 document.getElementById('mask').onclick = e => {
   if(e.target.id === 'mask') closeM();
 };
-document.getElementById('pq').oninput = e => renderPanel(e.target.value);
 document.getElementById('panel').onclick = e => {
   if(e.target.id === 'panel') closePanel();
 };
+document.getElementById('pq').oninput = e => renderPanel(e.target.value);
 document.addEventListener('keydown', e => {
-  if(e.key === 'Escape') closePanel();
+  if(e.key === 'Escape'){ closeM(); closePanel(); }
 });
-window.foState = () => ({ dec, stats: stats() });
 """
 
 
@@ -832,13 +837,20 @@ def main():
         for g in n['groups']:
             g['relationText'] = dec_mod.RELATION_TEXT.get(
                 g.get('relation', ''), g.get('relation', ''))
-            sug = dec_mod.suggest_group(
+            raw_sug = dec_mod.suggest_group(
                 g['name'], n['name'], zones_raw, n['path'])
-            g['suggest'] = sug
-            if sug['mode'] == 'keep' and sug.get('evidence'):
+
+            # 先记 AI 判断链（decisions.py 回填时写在这里）
+            if raw_sug.get('aiJudgement'):
+                g['ai'] = raw_sug['aiJudgement']
+
+            # 界面用的视图要重新算一遍——build_model 里算的是空的
+            g['suggest'] = _suggest_view(raw_sug)
+
+            if raw_sug['mode'] == 'keep' and raw_sug.get('evidence'):
                 for k in ('installer', 'media', 'image', 'code',
                           'document', 'archive'):
-                    if any(k in e for e in sug['evidence']):
+                    if any(k in e for e in raw_sug['evidence']):
                         unmatched.append((g['name'], k))
                         break
 
