@@ -54,6 +54,107 @@
       "_why": "'与'前面的主词才是类别词根。"
     },
     {
+      "name": "ComfyUI 图像生成运行环境",
+      "kind": "decision",
+      "stage": "S1",
+      "caseType": "semantic",
+      "evidence": ["归组成员是两套独立的 ComfyUI 便携运行环境", "组关系为多版本，成员是运行组件与整合压缩包"],
+      "expectedCategory": "AI工具",
+      "_why": "已知真盘误判：此前被通用图像词送到 H_Library/Media/R18G。真盘归组元数据显示两个单元是 ComfyUI 便携运行环境/压缩整合包，应按工具运行环境归到 AI工具。"
+    },
+    {
+      "name": "ComfyUI 运行环境优先于通用成人图像词",
+      "kind": "suggest",
+      "group": "ComfyUI 图像生成运行环境（便携包 + 秋叶整合包）",
+      "parent": "下载",
+      "zones": [
+        {"path": "/virtual/AI工具", "label": "AI工具", "depth": 1, "files": 12},
+        {"path": "/virtual/H_Library/Media/R18G", "label": "H_Library/Media/R18G", "depth": 3, "files": 80},
+        {"path": "/virtual/文件/软件安装包", "label": "文件/软件安装包", "depth": 2, "files": 100}
+      ],
+      "expectMode": "move",
+      "expectTarget": "/virtual/AI工具",
+      "expectCategory": "comfy_runtime",
+      "_why": "真盘元数据显示两单元是 ComfyUI 的便携运行环境/压缩整合包。运行环境信号须压过图像关键词，目标以已有 AI 工具区为准。"
+    },
+    {
+      "name": "语音合成与转换工具链",
+      "kind": "decision",
+      "stage": "S1",
+      "caseType": "semantic",
+      "evidence": ["内容是合成/转换软件及其运行组件", "不是合成后的歌曲或音频成品"],
+      "expectedCategory": "语音合成工具链",
+      "_why": "已知真盘误判。语音合成工具链应进入语音合成专类或已有 AI 工具区。"
+    },
+    {
+      "name": "语音合成工具链优先于通用软件安装包",
+      "kind": "suggest",
+      "group": "语音合成与转换工具链（So-VITS-SVC / VITS / MoeGoe + UVR5 人声分离）",
+      "parent": "下载",
+      "zones": [
+        {"path": "/virtual/语音合成", "label": "语音合成", "depth": 2, "files": 20},
+        {"path": "/virtual/AI工具", "label": "AI工具", "depth": 1, "files": 400},
+        {"path": "/virtual/文件/软件安装包", "label": "文件/软件安装包", "depth": 2, "files": 100}
+      ],
+      "expectMode": "move",
+      "expectTarget": "/virtual/语音合成",
+      "expectCategory": "voice_toolchain",
+      "_why": "真实归组元数据证明这是分离、训练/转换、合成的工具流水线。存在通用软件安装包候选时，仍应优先进入语音合成工具区。"
+    },
+    {
+      "name": "语音工具链没有语音专区时仍进入已有 AI 工具区",
+      "kind": "suggest",
+      "group": "语音合成与转换工具链（So-VITS-SVC / VITS / MoeGoe + UVR5 人声分离）",
+      "parent": "下载",
+      "zones": [
+        {"path": "/virtual/AI工具", "label": "AI工具", "depth": 1, "files": 400},
+        {"path": "/virtual/文件/软件安装包", "label": "文件/软件安装包", "depth": 2, "files": 100}
+      ],
+      "expectMode": "move",
+      "expectTarget": "/virtual/AI工具",
+      "expectCategory": "voice_toolchain",
+      "_why": "没有语音专类但已有 AI 工具区时，仍按运行用途分类；压缩包和安装器是工具链的交付形态。"
+    },
+    {
+      "name": "语音合成工具链无可信目标时转 full 复核",
+      "kind": "suggest",
+      "group": "语音合成与转换工具链（So-VITS-SVC / VITS / MoeGoe + UVR5 人声分离）",
+      "parent": "下载",
+      "zones": [
+        {"path": "/virtual/文件/软件安装包", "label": "文件/软件安装包", "depth": 2, "files": 100}
+      ],
+      "expectMode": "new",
+      "expectNeedsCheck": true,
+      "_why": "只有通用软件安装包区时不应降级到该区；需提出语音工具链分类并 full 复核。"
+    },
+    {
+      "name": "S1 安装包结构信号",
+      "kind": "decision",
+      "stage": "S1",
+      "caseType": "mechanical",
+      "evidence": ["已确认的 setup.exe + setup.bin / MSI + CAB 安装布局"],
+      "expectedCategory": "installer",
+      "_why": "结构可由文件布局机械确认；目标语义仍须结合项目内容。"
+    },
+    {
+      "name": "S2 套壳/空壳边界",
+      "kind": "decision",
+      "stage": "S2",
+      "caseType": "semantic",
+      "evidence": ["外层目录名与内层内容用途不一致", "需检查内层文件清单及结构"],
+      "expectedCategory": "人工复核",
+      "_why": "边界用例：名称信号不足以确定搬运对象，须检查内层内容。"
+    },
+    {
+      "name": "S3 整体归组中的安装器与声库",
+      "kind": "decision",
+      "stage": "S3",
+      "caseType": "semantic",
+      "evidence": ["已确认整体不拆", "多个单元共享一个去向组", "含编辑器安装器和依赖声库"],
+      "expectedCategory": "整体保持同组并复核去向",
+      "_why": "归组基准：组级移动遵循已确认的整体不拆关系，内部语义线索不能自动拆分。"
+    },
+    {
       "name": "编程课程合集",
       "kind": "stem",
       "expect": "编程课程",
@@ -73,8 +174,8 @@
     }
   ],
   "_pending": [
-    "S2 的边界判断用例（套壳、空壳、分卷）需要真实目录，暂缺",
-    "S3 的四类关系（集数互补/多季多版本/跨层重复/形态类聚）需要真实样本",
-    "验证分级的完整覆盖（direct/verify/full 各至少一条）"
+    "S2 空壳、分卷与真实目录结构仍需补充盘上样本",
+    "S3 集数互补、多季多版本、跨层重复的独立真盘样本仍需补充",
+    "语音合成/转换工具链的真盘文件结构样本待记录；当前结论基于已确认用途"
   ]
 }

@@ -13,6 +13,7 @@ dup_scan.json
 journal.tsv
 markers.tsv
 moves.log
+*.packtidy-receipt.json
 
 # 报告
 report/

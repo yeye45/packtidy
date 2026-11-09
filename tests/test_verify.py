@@ -53,6 +53,17 @@ class TestVerifyCases(unittest.TestCase):
         ok, msg = self.V.run_case(case, D)
         self.assertTrue(ok, msg)
 
+    def test_suggest_target_assertion_catches_wrong_destination(self):
+        case = {"kind":"suggest", "group":"ComfyUI 便携运行环境", "parent":"下载",
+                "zones":[{"path":"/ai", "label":"AI工具", "depth":1, "files":1}],
+                "expectMode":"move", "expectTarget":"/wrong"}
+        self.assertFalse(self.V.run_case(case, D)[0])
+        case["expectTarget"] = "/ai"
+        self.assertTrue(self.V.run_case(case, D)[0])
+
+    def test_suggest_without_assertions_fails(self):
+        self.assertFalse(self.V.run_case({"kind":"suggest", "group":"随便"}, D)[0])
+
     def test_unknown_kind_skipped(self):
         case = {"kind": "nonsense"}
         ok, msg = self.V.run_case(case, D)

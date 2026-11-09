@@ -103,10 +103,14 @@ def cmd_apply(args):
         argv += ["--reason", args.reason]
     if args.dry_run:
         argv.append("--dry-run")
+    if args.receipt:
+        argv += ["--receipt", args.receipt]
     if args.batch_size:
         argv += ["--batch-size", str(args.batch_size)]
     if args.allow_cross_drive:
         argv.append("--allow-cross-drive")
+    for destination_root in args.destination_root:
+        argv += ["--destination-root", destination_root]
     return ex.main(argv)
 
 
@@ -138,6 +142,8 @@ def cmd_ui(args):
     argv = ["--root", args.root]
     if args.probe:
         argv += ["--probe", args.probe]
+    if args.decisions:
+        argv += ["--decisions", args.decisions]
     if args.out:
         argv += ["--out", args.out]
     if args.open:
@@ -256,7 +262,7 @@ def main(argv=None):
     s = sub.add_parser("plan", help="生成待批清单")
     s.add_argument("root")
     s.add_argument("--probe")
-    s.add_argument("--policy")
+    s.add_argument("--policy", help="计划的审批策略，可指定额外的禁区")
     s.add_argument("--out")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(func=cmd_plan)
@@ -268,8 +274,11 @@ def main(argv=None):
     s.add_argument("--rename", nargs=2)
     s.add_argument("--reason", default="-")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--receipt", help="预演时写入新的 JSON 清单，执行时核对同一清单")
     s.add_argument("--batch-size", type=int, default=50)
     s.add_argument("--allow-cross-drive", action="store_true")
+    s.add_argument("--destination-root", action="append", default=[],
+                   help="显式授权的外部目标根目录，可重复指定")
     s.set_defaults(func=cmd_apply)
 
     s = sub.add_parser("undo", help="逆序撤销")
@@ -317,6 +326,7 @@ def main(argv=None):
     s = sub.add_parser("ui", help="生成决策界面")
     s.add_argument("root")
     s.add_argument("--probe")
+    s.add_argument("--decisions", help="S4 decisions.json，默认读取根目录的阶段产物")
     s.add_argument("--out")
     s.add_argument("--open", action="store_true")
     s.set_defaults(func=cmd_ui)

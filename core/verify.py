@@ -104,6 +104,21 @@ def run_case(case, decisions_mod):
         return (actual == expect,
                 f"{src!r} → 期望 {expect!r} / 实际 {actual!r}")
 
+    if kind == "decision":
+        # Curated semantic ground truth. Mechanical fields (e.g. extensions,
+        # installer layout) are recorded as evidence; destination may require
+        # human interpretation and is never inferred from a keyword here.
+        required = ("stage", "caseType", "evidence", "expectedCategory")
+        missing = [key for key in required if not case.get(key)]
+        if missing:
+            return False, "缺少基准字段: " + ", ".join(missing)
+        if case.get("caseType") not in ("mechanical", "semantic"):
+            return False, "caseType 必须为 mechanical 或 semantic"
+        if case.get("stage") not in ("S1", "S2", "S3"):
+            return False, "stage 必须为 S1/S2/S3"
+        return True, (f"{case['stage']} {case['caseType']} 基准记录完整；"
+                      f"期望类别 {case['expectedCategory']}（需据列出的证据判断）")
+
     if kind == "suggest":
         # 验建议
         shape = case.get("shape")
@@ -135,6 +150,13 @@ def run_case(case, decisions_mod):
             ok = ok and hit
             parts.append(f"needsCheck 期望 {expect_check} / "
                          f"实际 {sug.get('needsCheck')}")
+        for field, expected in (("target", "expectTarget"), ("category", "expectCategory")):
+            if expected in case:
+                actual = sug.get(field)
+                ok = ok and actual == case[expected]
+                parts.append(f"{field} 期望 {case[expected]} / 实际 {actual}")
+        if not parts:
+            return False, "suggest 用例缺少预期结果"
         return ok, "；".join(parts)
 
     return None, f"未知用例类型: {kind}"

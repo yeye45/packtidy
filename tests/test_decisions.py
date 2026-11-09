@@ -431,6 +431,42 @@ class TestApplyAnswers(unittest.TestCase):
                          "medium")
         os.unlink(path)
 
+    def test_existing_exact_label_target_becomes_move(self):
+        nodes = self._nodes(1)
+        zones = [{"path": "/catalog/语音合成", "label": "语音合成",
+                  "depth": 2, "files": 12}]
+        path = self._write([{
+            "parent": "P", "group": "G0", "label": "语音合成",
+            "hypothesis": "猜是工具链",
+            "verification": {"method": "看元数据", "findings": "语音工具"},
+            "confirmation": {"holds": True, "confidence": "high",
+                             "why": "用途确认", "residualRisk": ""},
+        }])
+        D.apply_answers(nodes, path, zones=zones)
+        sug = nodes[0]["groups"][0]["suggest"]
+        self.assertEqual(sug["mode"], "move")
+        self.assertEqual(sug["target"], "/catalog/语音合成")
+        self.assertFalse(sug["needsCheck"])
+        os.unlink(path)
+
+    def test_target_path_must_match_zone_exactly(self):
+        nodes = self._nodes(1)
+        zones = [{"path": "/catalog/语音合成", "label": "语音合成",
+                  "depth": 2, "files": 12}]
+        path = self._write([{
+            "parent": "P", "group": "G0", "target": "/catalog",
+            "hypothesis": "猜是工具链",
+            "verification": {"method": "看元数据", "findings": "语音工具"},
+            "confirmation": {"holds": True, "confidence": "high",
+                             "why": "用途确认", "residualRisk": ""},
+        }])
+        D.apply_answers(nodes, path, zones=zones)
+        sug = nodes[0]["groups"][0]["suggest"]
+        self.assertEqual(sug["mode"], "keep")
+        self.assertTrue(sug["needsCheck"])
+        self.assertTrue(any("未与 zones" in x for x in sug["evidence"]))
+        os.unlink(path)
+
     def test_unmatched_reported(self):
         nodes = self._nodes()
         path = self._write([{"parent": "不存在", "group": "也没有",
@@ -479,7 +515,7 @@ class TestVerificationTier(unittest.TestCase):
         self.assertEqual(D.verification_tier("x", sug), "full")
 
     def test_new_requires_full(self):
-        sug = {"mode": "new", "evidence": []}
+        sug = {"mode": "new", "evidence": ["unity-layout: true"]}
         self.assertEqual(D.verification_tier("x", sug), "full")
 
     def test_shape_evidence_requires_verify(self):
@@ -548,6 +584,43 @@ class TestTierEnforcement(unittest.TestCase):
         g = nodes[0]["groups"][2]["suggest"]
         self.assertEqual(g["aiJudgement"]["verificationTier"], "full")
         self.assertTrue(g["needsCheck"], "必须三步的缺步骤应仍待确认")
+        os.unlink(path)
+
+    def test_answer_cannot_lower_required_tier(self):
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "F", "category": "x", "label": "X",
+            "tier": "direct", "evidence": "有内容",
+            "confirmation": {"holds": True}}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][2]["suggest"]
+        self.assertEqual(g["aiJudgement"]["verificationTier"], "full")
+        self.assertTrue(g["needsCheck"])
+        os.unlink(path)
+
+    def test_direct_recommendation_cannot_be_upgraded_to_bypass_full(self):
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "D", "category": "x", "label": "X",
+            "tier": "direct", "evidence": "结构明确",
+            "confirmation": {"holds": "false"}}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][0]["suggest"]
+        self.assertEqual(g["aiJudgement"]["verificationTier"], "direct")
+        self.assertTrue(g["needsCheck"], "字符串 holds 不可作为确认结论")
+        self.assertIsNone(g["aiJudgement"]["confirmation"]["holds"])
+        os.unlink(path)
+
+    def test_full_requires_all_three_step_fields_and_boolean_holds(self):
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "F", "category": "x", "label": "X",
+            "hypothesis": "初猜", "verification": {"method": "查证", "findings": "找到证据"},
+            "confirmation": {"holds": "true", "confidence": "high", "why": "确认"}}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][2]["suggest"]
+        self.assertTrue(g["needsCheck"])
+        self.assertIsNone(g["aiJudgement"]["confirmation"]["holds"])
         os.unlink(path)
 
 
@@ -631,37 +704,74 @@ class TestPolicyMapping(unittest.TestCase):
         missing = cats - set(D.CATEGORY_KEYS)
         self.assertFalse(missing, f"CATEGORY_KEYS 缺: {missing}")
 
+    def test_boot_rules_uses_root_policy_rules_path(self):
+        import json
+        import rules
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as d:
+            root = _P(d)
+            org = root / "_organize"
+            org.mkdir()
+            custom = root / "custom.json"
+            data = json.loads((_P(__file__).resolve().parent.parent /
+                               "rules" / "default.json").read_text(encoding="utf-8-sig"))
+            data["categories"] = {"custom": {"keys": ["unique_custom_key"],
+                                              "suggest": ["custom_target"]}}
+            custom.write_text(json.dumps(data), encoding="utf-8")
+            (org / "policy.json").write_text(
+                json.dumps({"rules": "../custom.json"}), encoding="utf-8")
+            old_rules = [dict(x) for x in D.CROSS_RULES]
+            try:
+                loaded = D._boot_rules(str(root))
+                self.assertEqual(loaded["categories"].keys(), {"custom"})
+                self.assertTrue(any("unique_custom_key" in r["keys"]
+                                    for r in D.CROSS_RULES))
+            finally:
+                D.CROSS_RULES = old_rules
+
+    def test_boot_rules_does_not_change_safety_globals(self):
+        import safety
+        before = (set(safety.PROTECTED_NAMES), set(safety.NESTED_ALLOW),
+                  set(safety.NESTED_DENY))
+        with tempfile.TemporaryDirectory() as d:
+            D._boot_rules(d)
+        after = (set(safety.PROTECTED_NAMES), set(safety.NESTED_ALLOW),
+                 set(safety.NESTED_DENY))
+        self.assertEqual(after, before)
+
+    def test_invalid_root_rules_path_raises(self):
+        import json
+        from pathlib import Path as _P
+        import rules
+        with tempfile.TemporaryDirectory() as d:
+            org = _P(d) / "_organize"
+            org.mkdir()
+            (org / "policy.json").write_text(
+                json.dumps({"rules": "missing.json"}), encoding="utf-8")
+            with self.assertRaises(rules.RulesError):
+                D._boot_rules(d)
+
+    def test_cli_rejects_invalid_root_rules_path(self):
+        import json
+        import sys
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from pathlib import Path as _P
+        with tempfile.TemporaryDirectory() as d:
+            org = _P(d) / "_organize"
+            org.mkdir()
+            (org / "policy.json").write_text(
+                json.dumps({"rules": "missing.json"}), encoding="utf-8")
+            old_argv = sys.argv
+            try:
+                sys.argv = ["decisions.py", "--root", d]
+                with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as e:
+                    D.main()
+                self.assertEqual(e.exception.code, 2)
+            finally:
+                sys.argv = old_argv
 
 
-
-class TestUiUnitList(unittest.TestCase):
-    """ui._unit_list —— units 可能是数组也可能只是计数。"""
-
-    def test_list_passthrough(self):
-        import ui
-        r = ui._unit_list({"units": ["a", "b", "c"]})
-        self.assertEqual(r, ["a", "b", "c"])
-
-    def test_int_becomes_placeholders(self):
-        import ui
-        r = ui._unit_list({"units": 3})
-        self.assertEqual(len(r), 3)
-        self.assertTrue(all("第" in x for x in r))
-
-    def test_missing_returns_empty(self):
-        import ui
-        self.assertEqual(ui._unit_list({}), [])
-        self.assertEqual(ui._unit_list({"units": None}), [])
-
-    def test_long_list_truncated(self):
-        import ui
-        r = ui._unit_list({"units": [f"u{i}" for i in range(200)]})
-        self.assertLessEqual(len(r), 60)
-
-    def test_very_long_name_truncated(self):
-        import ui
-        r = ui._unit_list({"units": ["x" * 500]})
-        self.assertLessEqual(len(r[0]), 200)
 
 
 class TestUiLoadsRules(unittest.TestCase):

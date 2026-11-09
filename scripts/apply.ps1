@@ -2,13 +2,14 @@
 Execute approved actions.tsv via the shared Python engine.
 move dst = target directory; rename dst = new leaf name; mkdir dst = absolute directory.
 -Plan remains available for rename/merge. split requires explicit actions after grouping.
--DryRun is read-only. Interrupted transactions must be reconciled with recover.ps1.
+-DryRun does not move files. Use -Receipt on preview and apply to verify exact destinations.
+Interrupted transactions must be reconciled with recover.ps1.
 #>
 param(
     [string]$Actions, [string]$Plan, [Parameter(Mandatory)][string]$Root,
     [string]$Reason = '-', [switch]$DryRun,
     [ValidateRange(1,200)][int]$BatchSize = 50,
-    [switch]$AllowCrossDrive, [string[]]$Rename
+    [switch]$AllowCrossDrive, [string[]]$Rename, [string[]]$DestinationRoot, [string]$Receipt
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
@@ -22,6 +23,8 @@ if ($Rename) {
     $arguments += @('--rename',$Rename[0],$Rename[1],('--reason=' + $Reason))
 }
 if ($DryRun) { $arguments += '--dry-run' }
+if ($Receipt) { $arguments += @('--receipt', $Receipt) }
 if ($AllowCrossDrive) { $arguments += '--allow-cross-drive' }
+foreach ($destination in $DestinationRoot) { $arguments += @('--destination-root', $destination) }
 Invoke-Organizer -Arguments $arguments
 exit $script:OrganizerExitCode

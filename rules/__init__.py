@@ -1,0 +1,1 @@
+"""Bundled packtidy rule data."""

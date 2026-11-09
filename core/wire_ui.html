@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+<title>PackTidy · 连线工作台</title>
+<style>
+:root{color-scheme:light dark;--bg:#f3f6fb;--paper:#fff;--tint:#ecf2fa;--ink:#152039;--muted:#566781;--line:#d1dceb;--accent:#245bcc;--wire:#3470e7;--ok:#176b54;--warn:#884405;--focus:#235dce}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101620;--paper:#182331;--tint:#223145;--ink:#eaf1fb;--muted:#a9b9d1;--line:#384c66;--accent:#9abbff;--wire:#83adff;--ok:#81dac2;--warn:#ffc88a;--focus:#9abbff}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#101620;--paper:#182331;--tint:#223145;--ink:#eaf1fb;--muted:#a9b9d1;--line:#384c66;--accent:#9abbff;--wire:#83adff;--ok:#81dac2;--warn:#ffc88a;--focus:#9abbff}
+:root[data-theme="light"]{color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;height:100dvh;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr) auto;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,"Microsoft YaHei",sans-serif}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);border-radius:7px;background:var(--paper);padding:5px 9px}
+button:hover{border-color:var(--accent)}
+button:disabled{opacity:.55;cursor:default}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+header{display:flex;align-items:center;gap:12px;justify-content:space-between;padding:14px 19px;background:var(--paper);border-bottom:1px solid var(--line)}
+h1{font-size:20px;margin:0}
+header small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+header>div:first-child{min-width:0}
+.actions{display:flex;align-items:center;gap:6px;flex:none}
+.primary{background:var(--accent);color:var(--paper);border-color:var(--accent);font-weight:650}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 19px;font-size:13px;color:var(--muted)}
+.toolbar strong{color:var(--ink)}
+#board{display:grid;grid-template-columns:minmax(0,1.15fr) clamp(52px,10vw,136px) minmax(0,1fr);min-height:0;position:relative;padding:0 12px;overflow:hidden}
+.pane{display:grid;grid-template-rows:auto minmax(0,1fr);min-width:0;min-height:0}
+.left{grid-column:1}.right{grid-column:3}
+.pane-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:7px 4px}
+.pane-head h2{font-size:14px;margin:0 auto 0 0}
+.pane-head input{min-width:60px;width:min(100%,200px)}
+input,select{background:var(--paper);border:1px solid var(--line);border-radius:7px;padding:5px 6px}
+.pane-scroll{overflow:auto;min-height:0;padding:3px 5px 12px;scrollbar-width:thin}
+.card,.target{background:var(--paper);border:1px solid var(--line);border-radius:9px;margin-bottom:7px;position:relative;min-width:0}
+.card{padding:10px 39px 8px 10px}
+.card.selected,.target.hot{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.card h3,.target-label{margin:0;font-size:14px;overflow-wrap:anywhere;font-weight:650}
+.meta{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.note{margin:5px 0;color:var(--muted)}
+.badge{display:inline-block;border:1px solid var(--line);border-radius:5px;padding:0 5px;margin-right:5px;font-size:11px}
+.tier-full,.partial{color:var(--warn);background:var(--tint)}
+.linked{color:var(--ok)}
+summary{cursor:pointer;color:var(--accent);width:fit-content;margin:5px 0;font-size:12px}
+.evidence{padding:5px 0;font-size:12px}
+.evidence ul{padding-left:18px;margin:4px 0}
+.unit{position:relative;padding:7px 32px 7px 7px;margin-right:-31px;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.unit.selected{background:var(--tint)}
+.port{position:absolute;display:grid;place-items:center;top:50%;transform:translateY(-50%);width:32px;height:32px;border:0;background:transparent;padding:0;z-index:4;touch-action:none}
+.port::after{content:'';width:11px;height:11px;border:2px solid var(--wire);border-radius:50%;background:var(--paper)}
+.port:hover::after,.port.active::after{background:var(--wire);box-shadow:0 0 0 4px var(--tint)}
+.source-port{right:0;cursor:crosshair}
+.group-port{top:25px}
+.target-port{left:0}
+.target{padding:8px 8px 8px 34px;display:flex;gap:6px;align-items:center}
+.target-label{flex:1}
+.zone-title{display:flex;align-items:center;gap:5px;margin:5px 0}
+.zone-title button{padding:1px 5px}
+.target.child{padding-left:43px}
+.target.active-target{border-color:var(--ok)}
+.wire-svg{position:absolute;inset:0;width:100%;height:100%;z-index:2;pointer-events:none}
+.wire{fill:none;stroke:var(--wire);stroke-width:2.4;opacity:.86;pointer-events:none}
+.wire-hit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke;cursor:pointer}
+.wire-hit:hover+.wire{stroke-width:4;opacity:1}
+.draft{stroke-dasharray:6 5;opacity:.75}
+.unlink{margin-top:4px;padding:2px 6px;font-size:12px}
+.empty{color:var(--muted);padding:9px}
+footer{padding:8px 15px;color:var(--muted);border-top:1px solid var(--line);background:var(--paper);font-size:12px}
+dialog{width:min(740px,calc(100% - 22px));max-height:85vh;background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:14px}
+dialog::backdrop{background:#0713239a}
+dialog h2{font-size:18px;margin:0 0 8px}
+dialog pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--tint);padding:9px;max-height:49vh;overflow:auto}
+.dialog-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+#proposalList li{margin-bottom:12px}
+#correctionRows{display:grid;gap:10px;margin:10px 0 16px}.correction-row{display:grid;grid-template-columns:minmax(110px,1fr) repeat(3,minmax(120px,1.25fr));gap:8px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--tint)}.correction-row label{display:grid;gap:4px;font-size:12px;color:var(--muted)}.correction-row input{width:100%;min-width:0;color:var(--ink)}
+@media(max-width:690px){.correction-row{grid-template-columns:1fr 1fr}.correction-row strong{grid-column:1/-1}}
+@media(max-width:690px){header{padding:8px 10px;align-items:flex-start;gap:5px}h1{font-size:16px}.actions{flex-wrap:wrap;justify-content:flex-end}.actions button{font-size:12px}.toolbar{padding:6px 10px}#board{padding:0 2px;grid-template-columns:minmax(0,1.1fr) 38px minmax(0,1fr)}.pane-head{font-size:12px}.card h3,.target-label{font-size:12px}.target.child{padding-left:34px}.pane-scroll{padding-left:3px;padding-right:3px}}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>PackTidy 连线工作台</h1><small title="__ROOT__">__ROOT__</small></div>
+  <div class="actions"><button id="undoButton" aria-label="撤销连线">撤销</button><button id="redoButton" aria-label="重做连线">重做</button><button id="proposalsButton">候选类别</button><button id="reviewButton" class="primary">复核清单</button><button id="theme" aria-label="切换明暗主题">◐</button></div>
+</header>
+<div class="toolbar"><strong id="progress"></strong><span id="summary"></span></div>
+<main id="board" aria-label="整理连线">
+  <svg class="wire-svg" id="wires" aria-hidden="true"></svg>
+  <section class="pane left" aria-label="来源">
+    <div class="pane-head"><h2>整理分组</h2><label><select id="statusFilter" aria-label="按连线状态筛选">
+      <option value="all">全部</option><option value="pending">待连</option><option value="partial">部分已连</option><option value="linked">已连完</option>
+    </select></label><input id="groupSearch" type="search" aria-label="搜索分组" placeholder="分组或来源"></div>
+    <div class="pane-scroll" id="left"></div>
+  </section>
+  <section class="pane right" aria-label="去向">
+    <div class="pane-head"><h2>目标目录</h2><input id="targetSearch" type="search" aria-label="搜索目标" placeholder="搜索目录或路径"></div>
+    <div class="pane-scroll" id="right"></div>
+  </section>
+</main>
+<footer id="hint" role="status">从左侧圆点拖到目标，或依次点选两端。点击线条或「断开」可撤销连线。</footer>
+<dialog id="review" aria-labelledby="reviewTitle">
+  <h2 id="reviewTitle">整理复核清单</h2><p id="reviewStatus"></p><pre id="reviewText"></pre><section id="corrections"><h3>本地分类修正（可选）</h3><p class="meta">仅供你下载整理；不会上传，也不会移动文件。补充“这是什么”，并可修改建议或已选去向标签。</p><div id="correctionRows"></div></section>
+  <div class="dialog-actions"><form method="dialog"><button>关闭</button></form>
+    <button id="downloadReview">下载复核清单</button><button id="downloadCorrections">下载本地分类修正</button><button id="downloadActions" class="primary">下载已连动作表</button></div>
+</dialog>
+<dialog id="proposals" aria-labelledby="proposalsTitle">
+  <h2 id="proposalsTitle">候选类别</h2><p>这些建议来自当前整理分组。选择去向后，实际目录由执行步骤创建。</p>
+  <ul id="proposalList"></ul><form method="dialog"><button>关闭</button></form>
+</dialog>
+<script>
+'use strict';
+const DATA = __PACKTIDY_DATA__;
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const KEEP = '@keep';
+const tierLabels = {direct:'直接定',verify:'需验证',full:'完整验证'};
+const storageKey = 'packtidy-wires-v1:' + DATA.root;
+const targets = new Map([[KEEP,{path:KEEP,label:'保持原位',depth:0}], ...DATA.zones.map(z => [z.path,z])]);
+const groups = DATA.nodes.flatMap(node => node.groups.map(group => {
+  const id = JSON.stringify([node.id,group.id]);
+  const units = group.units.map(unit => ({...unit,key:JSON.stringify([id,unit.id])}));
+  return {...group,id,node,units,keys:units.length ? units.map(u => u.key) : [id]};
+}));
+const byGroup = new Map(groups.map(g => [g.id,g]));
+const unitKeys = new Set(groups.flatMap(g => g.keys));
+const places = new Map();
+const openGroups = new Set();
+const openZones = new Set(['AI工具','游戏','影视','学习资料']);
+const svgNS = 'http://www.w3.org/2000/svg';
+const hint = '从左侧圆点拖到目标，或依次点选两端。点击线条或「断开」可撤销连线。';
+let active = null;
+let pointer = null;
+let frame = 0;
+let exportRows = [];
+let selectionNotice = '';
+const undoStack = [], redoStack = [];
+try {
+  const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+  for (const [id,target] of saved) if (unitKeys.has(id) && targets.has(target)) places.set(id,target);
+  const theme = localStorage.getItem('packtidy-theme');
+  if (theme) document.documentElement.dataset.theme = theme;
+} catch (_) {}
+for (const group of groups) {
+  const assigned = state(group);
+  if (assigned.count && !assigned.target) openGroups.add(group.id);
+}
+function label(target) {return targets.get(target)?.label || target || '';}
+function state(g) {
+  const assigned = g.keys.map(k => places.get(k)).filter(Boolean);
+  const target = assigned.length === g.keys.length && assigned.every(t => t === assigned[0]) ? assigned[0] : null;
+  return {count:assigned.length,target};
+}
+function save() {try {localStorage.setItem(storageKey,JSON.stringify([...places]));} catch (_) {} updateHistoryButtons();}
+function snapshot() {undoStack.push([...places]); if (undoStack.length > 100) undoStack.shift(); redoStack.length=0; updateHistoryButtons();}
+function updateHistoryButtons() {$('undoButton').disabled=!undoStack.length; $('redoButton').disabled=!redoStack.length;}
+function restore(next,stack) {stack.push([...places]); places.clear(); for (const [k,v] of next) places.set(k,v); active=pointer=null; save(); refresh();}
+function sourceAttrs(group,unit) {
+  return `data-group="${esc(group)}"${unit ? ` data-unit="${esc(unit)}"` : ''}`;
+}
+function reason(g) {
+  const a = g.ai;
+  const rows = [];
+  if (g.why) rows.push(['归组依据',g.why]);
+  if (g.suggest.reason) rows.push(['规则依据',g.suggest.reason]);
+  if (Array.isArray(g.suggest.evidence)) for (const e of g.suggest.evidence) rows.push(['证据',e]);
+  if (a) {
+    rows.push(['猜想',a.hypothesis],['验证',a.verification?.method],['发现',a.verification?.findings]);
+    if (Array.isArray(a.verification?.disproved) && a.verification.disproved.length)
+      rows.push(['推翻',a.verification.disproved.join('；')]);
+    const c = a.confirmation;
+    if (c) rows.push(['确认',[c.holds === true ? '站得住' : c.holds === false ? '站不住' : '未确认',c.why,c.confidence].filter(Boolean).join(' · ')],['剩余风险',c.residualRisk]);
+  }
+  return rows.filter(([,value]) => value).map(([title,value]) => `<div><strong>${title}</strong>　${esc(value)}</div>`).join('');
+}
+function renderGroup(g) {
+  const s = state(g);
+  const status = s.target ? '→ ' + label(s.target) :
+    s.count === g.keys.length ? '已连完 · 多去向' : s.count ? `已连 ${s.count}/${g.keys.length}` : '待连';
+  const rec = g.suggest.target ? label(g.suggest.target) : g.suggest.label;
+  const units = g.units.map(u => {
+    const target = places.get(u.key);
+    return `<div class="unit" ${sourceAttrs(g.id,u.key)}>
+      <div>${esc(u.label)}</div>
+      <div class="meta">${u.source ? '' : '仅复核 · '}${target ? esc('→ ' + label(target)) : '待连'}</div>
+      ${target ? `<button class="unlink" data-action="unlink" ${sourceAttrs(g.id,u.key)}>断开</button>` : ''}
+      <button class="port source-port" data-source ${sourceAttrs(g.id,u.key)} aria-label="从 ${esc(u.label)} 连线"></button>
+    </div>`;
+  }).join('');
+  return `<article class="card" data-card="${esc(g.id)}">
+    <h3>${esc(g.name)}</h3><div class="meta">${esc(g.node.name)} · ${g.count} 项</div>
+    <div class="note"><span class="badge tier-${esc(g.tier)}" title="${esc(g.tier)}">${esc(tierLabels[g.tier])}</span>
+      <span class="badge ${s.count === g.keys.length ? 'linked' : s.count ? 'partial' : ''}">${esc(status)}</span></div>
+    ${rec ? `<div class="meta">建议 ${esc(rec)}${g.suggest.needsCheck ? ' · 需复核' : ''}</div>` : ''}
+    <button class="port source-port group-port" data-source ${sourceAttrs(g.id)} aria-label="从整组 ${esc(g.name)} 连线"></button>
+    ${s.count ? `<button class="unlink" data-action="unlink" ${sourceAttrs(g.id)}>断开整组</button>` : ''}
+    ${s.count ? `<button class="unlink" data-action="override-group" ${sourceAttrs(g.id)}>覆盖整组去向…</button>` : ''}
+    <details data-details="${esc(g.id)}" ${openGroups.has(g.id) ? 'open' : ''}>
+      <summary>依据与单元${g.ai ? ' · AI 判断链' : ''}</summary>
+      <div class="evidence">${reason(g) || '暂无判断依据。'}</div>
+      ${units || '<div class="meta">只记录了数量。此组可连线复核，无法生成文件动作。</div>'}
+    </details>
+  </article>`;
+}
+function renderLeft() {
+  const query = $('groupSearch').value.trim().toLocaleLowerCase();
+  const filter = $('statusFilter').value;
+  const filtered = groups.filter(g => {
+    const {count} = state(g);
+    if (filter === 'pending' && count || filter === 'partial' && !(count && count < g.keys.length)
+        || filter === 'linked' && count !== g.keys.length) return false;
+    return !query || [g.name,g.node.path,...g.units.map(u => u.label)].some(t => t.toLocaleLowerCase().includes(query));
+  });
+  $('left').innerHTML = filtered.map(renderGroup).join('') || '<p class="empty">没有匹配的分组。</p>';
+}
+function renderRight() {
+  const query = $('targetSearch').value.trim().toLocaleLowerCase();
+  const counts = new Map();
+  for (const target of places.values()) counts.set(target,(counts.get(target) || 0)+1);
+  const tops = new Map();
+  const rows = [];
+  function row(t) {
+    const count = counts.get(t.path);
+    return `<div class="target${t.depth > 1 ? ' child' : ''}${count ? ' active-target' : ''}" data-target="${esc(t.path)}">
+      <button class="port target-port" aria-label="连到 ${esc(t.label)}"></button>
+      <span class="target-label" title="${esc(t.path)}">${esc(t.label)}${t.new ? ' · 新建' : ''}</span>
+      ${count ? `<span class="badge linked">${count}</span>` : ''}
+    </div>`;
+  }
+  rows.push(row(targets.get(KEEP)));
+  for (const t of DATA.zones) {
+    if (query && ![t.label,t.path].some(value => value.toLocaleLowerCase().includes(query))) continue;
+    const top = t.label.split('/')[0];
+    if (!tops.has(top)) tops.set(top,[]);
+    tops.get(top).push(t);
+  }
+  for (const [name,list] of tops) {
+    const hasChildren = list.some(t => t.depth > 1);
+    const expanded = !!query || openZones.has(name) || list.some(t => counts.has(t.path) && t.depth > 1);
+    if (hasChildren && !query) rows.push(`<div class="zone-title"><button data-zone="${esc(name)}" aria-expanded="${expanded}">${expanded ? '−' : '+'}</button><span>${esc(name)}</span></div>`);
+    for (const target of list) if (!hasChildren || expanded || target.depth <= 1) rows.push(row(target));
+  }
+  $('right').innerHTML = rows.join('');
+}
+function refresh() {
+  renderLeft(); renderRight();
+  const total = unitKeys.size;
+  $('progress').textContent = `已连 ${places.size} / ${total} 项`;
+  $('summary').textContent = `${groups.length} 组 · ${DATA.matchedAnswers} 份已回填判断`;
+  $('proposalsButton').textContent = `候选类别 ${Object.keys(DATA.proposedCategories).length}`;
+  markActive(); scheduleDraw();
+}
+function markActive() {
+  for (const port of $('left').querySelectorAll('[data-source]')) {
+    const selected = active && port.dataset.group === active.group && (port.dataset.unit || '') === active.unit;
+    port.classList.toggle('active',!!selected);
+    port.setAttribute('aria-pressed',String(!!selected));
+  }
+  $('hint').textContent = active ? (active.override ? '覆盖模式：点击目标可用新去向替换整组；确认后生效，Esc 取消。' : '已选择来源。松手或点击目标圆点连接，Esc 取消。') : (selectionNotice || hint);
+  selectionNotice = '';
+}
+function cancelHiddenSelection() {
+  if (!active) return;
+  const visible = [...$('left').querySelectorAll('[data-source]')].some(p =>
+    p.dataset.group === active.group && (p.dataset.unit || '') === active.unit && p.getClientRects().length);
+  if (!visible) {
+    active = pointer = null;
+    selectionNotice = '来源已隐藏，已取消选择。';
+  }
+}
+function assign(source,target) {
+  const g = byGroup.get(source.group);
+  if (!g || !targets.has(target)) return;
+  const keys=source.unit ? [source.unit] : (source.override ? g.keys : g.keys.filter(k=>!places.has(k)));
+  if (!keys.length) {
+    active = pointer = null;
+    selectionNotice = '这组已经全部分配。要改去向，请选择「覆盖整组去向」。';
+    markActive(); scheduleDraw();
+    return;
+  }
+  const overwrites=keys.filter(k=>places.has(k)&&places.get(k)!==target);
+  if (source.override && overwrites.length && !window.confirm(`将覆盖此组 ${overwrites.length} 项现有连线。确定继续吗？`)) {active=pointer=null; markActive(); scheduleDraw(); return;}
+  if (keys.some(k=>places.get(k)!==target)) snapshot();
+  for (const k of keys) places.set(k,target);
+  if (source.unit) openGroups.add(g.id);
+  active = pointer = null;
+  save(); refresh();
+}
+function unlink(group,unit) {
+  const g = byGroup.get(group);
+  if (!g) return;
+  const keys=unit ? [unit] : g.keys;
+  if (keys.some(k=>places.has(k))) snapshot();
+  for (const k of keys) places.delete(k);
+  active = pointer = null;
+  save(); refresh();
+}
+function scheduleDraw() {
+  if (!frame) frame = requestAnimationFrame(() => {frame = 0; draw();});
+}
+function svg(tag,attributes) {
+  const el = document.createElementNS(svgNS,tag);
+  for (const [key,value] of Object.entries(attributes)) el.setAttribute(key,value);
+  return el;
+}
+function draw() {
+  const canvas = $('wires'), board = $('board').getBoundingClientRect();
+  const left = $('left').getBoundingClientRect(), right = $('right').getBoundingClientRect();
+  const ports = new Map([...$('left').querySelectorAll('[data-source]')].map(p => [p.dataset.unit || p.dataset.group,p]));
+  const ends = new Map([...$('right').querySelectorAll('[data-target]')].map(t => [t.dataset.target,t.querySelector('.target-port')]));
+  const layer = document.createDocumentFragment();
+  function point(port,clip) {
+    if (!port || !port.getClientRects().length) return null;
+    const r = port.getBoundingClientRect(), x = r.left+r.width/2, y = r.top+r.height/2;
+    if (y < clip.top || y > clip.bottom) return null;
+    return [x-board.left,y-board.top];
+  }
+  function curve(a,b) {
+    const mid = (a[0]+b[0])/2;
+    return `M ${a[0]} ${a[1]} C ${mid} ${a[1]}, ${mid} ${b[1]}, ${b[0]} ${b[1]}`;
+  }
+  function edge(group,unit,target) {
+    const a = point(ports.get(unit || group),left), b = point(ends.get(target),right);
+    if (!a || !b) return;
+    const d = curve(a,b);
+    const hit = svg('path',{d,class:'wire-hit','data-wire':unit || group});
+    hit.addEventListener('click',() => unlink(group,unit));
+    layer.append(hit,svg('path',{d,class:'wire'}));
+  }
+  for (const g of groups) {
+    const s = state(g);
+    if (s.target) edge(g.id,null,s.target);
+    else for (const unit of g.units) if (places.has(unit.key)) edge(g.id,unit.key,places.get(unit.key));
+  }
+  if (pointer?.moved && active) {
+    const a = point(ports.get(active.unit || active.group),left);
+    if (a) layer.append(svg('path',{d:curve(a,[pointer.x-board.left,pointer.y-board.top]),class:'wire draft'}));
+  }
+  canvas.replaceChildren(layer);
+}
+$('left').addEventListener('pointerdown',event => {
+  const port = event.target.closest('[data-source]');
+  if (!port || event.button !== 0) return;
+  event.preventDefault();
+  const prior = active;
+  active = {group:port.dataset.group,unit:port.dataset.unit || ''};
+  pointer = {id:event.pointerId,x:event.clientX,y:event.clientY,x0:event.clientX,y0:event.clientY,moved:false,prior};
+  markActive(); scheduleDraw();
+});
+function hitTarget(event) {return document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-target]');}
+document.addEventListener('pointermove',event => {
+  if (!pointer || event.pointerId !== pointer.id) return;
+  pointer.x=event.clientX; pointer.y=event.clientY;
+  pointer.moved ||= Math.hypot(pointer.x-pointer.x0,pointer.y-pointer.y0)>5;
+  for (const element of $('right').querySelectorAll('.hot')) element.classList.remove('hot');
+  if (pointer.moved) hitTarget(event)?.classList.add('hot');
+  scheduleDraw();
+});
+document.addEventListener('pointerup',event => {
+  if (!pointer || event.pointerId !== pointer.id) return;
+  const target = hitTarget(event);
+  const previous = pointer;
+  pointer = null;
+  for (const element of $('right').querySelectorAll('.hot')) element.classList.remove('hot');
+  if (target && previous.moved && active) assign(active,target.dataset.target);
+  else {
+    if (previous.moved || (previous.prior?.group === active?.group && previous.prior?.unit === active?.unit)) active = null;
+    markActive(); scheduleDraw();
+  }
+});
+document.addEventListener('pointercancel',() => {
+  if (pointer) {pointer = active = null; markActive(); scheduleDraw();}
+});
+document.addEventListener('keydown',event => {
+  if (event.key === 'Escape' && active) {pointer = active = null; markActive(); scheduleDraw();}
+  const editing=event.target.matches('input,textarea,select,[contenteditable="true"]') || event.target.closest('[contenteditable="true"]');
+  const modalOpen=[...document.querySelectorAll('dialog')].some(d=>d.open);
+  if ((event.ctrlKey||event.metaKey) && !editing && !modalOpen && event.key.toLowerCase()==='z') {event.preventDefault(); if(event.shiftKey){if(redoStack.length)restore(redoStack.pop(),undoStack);}else if(undoStack.length)restore(undoStack.pop(),redoStack);}
+  if ((event.ctrlKey||event.metaKey) && !editing && !modalOpen && event.key.toLowerCase()==='y') {event.preventDefault(); if(redoStack.length)restore(redoStack.pop(),undoStack);}
+});
+$('left').addEventListener('click',event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  if (button.dataset.action === 'unlink') unlink(button.dataset.group,button.dataset.unit);
+  if (button.dataset.action === 'override-group') {active={group:button.dataset.group,unit:'',override:true}; markActive(); scheduleDraw();}
+  if (button.hasAttribute('data-source') && event.detail === 0) {
+    active = {group:button.dataset.group,unit:button.dataset.unit || ''}; markActive(); scheduleDraw();
+  }
+});
+$('left').addEventListener('contextmenu',event => {
+  const card = event.target.closest('[data-card]');
+  if (card && state(byGroup.get(card.dataset.card)).count) {event.preventDefault(); unlink(card.dataset.card);}
+});
+$('left').addEventListener('toggle',event => {
+  const details = event.target;
+  if (!details.dataset.details || !details.isConnected) return;
+  if (details.open) openGroups.add(details.dataset.details); else openGroups.delete(details.dataset.details);
+  if (!details.open && active) {cancelHiddenSelection(); markActive();}
+  scheduleDraw();
+},true);
+$('right').addEventListener('click',event => {
+  const toggle = event.target.closest('[data-zone]');
+  if (toggle) {
+    const name = toggle.dataset.zone;
+    if (openZones.has(name)) openZones.delete(name); else openZones.add(name);
+    renderRight(); scheduleDraw(); return;
+  }
+  const target = event.target.closest('[data-target]');
+  if (active && target) assign(active,target.dataset.target);
+});
+for (const id of ['left','right']) $(id).addEventListener('scroll',scheduleDraw,{passive:true});
+window.addEventListener('resize',scheduleDraw);
+$('groupSearch').addEventListener('input',() => {renderLeft(); cancelHiddenSelection(); markActive(); scheduleDraw();});
+$('statusFilter').addEventListener('change',() => {renderLeft(); cancelHiddenSelection(); markActive(); scheduleDraw();});
+$('targetSearch').addEventListener('input',() => {renderRight(); scheduleDraw();});
+$('theme').addEventListener('click',() => {
+  const current = document.documentElement.dataset.theme;
+  const dark = current ? current === 'dark' : matchMedia('(prefers-color-scheme:dark)').matches;
+  const next = dark ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try {localStorage.setItem('packtidy-theme',next);} catch (_) {}
+});
+function collectReview() {
+  const rows = [], pending = [], reviewOnly = [], kept = [];
+  for (const g of groups) {
+    const entries = g.units.length ? g.units : [{key:g.id,label:g.name,source:null}];
+    for (const u of entries) {
+      const target = places.get(u.key);
+      const display = `${g.node.name} / ${g.name} / ${u.label}`;
+      if (!target) pending.push(display);
+      else if (target === KEEP) kept.push(display);
+      else if (!u.source) reviewOnly.push(`${display} → ${label(target)}`);
+      else rows.push(['move',u.source,target,'工作台手动连线']);
+    }
+  }
+  const normalize = value => DATA.caseInsensitive ? value.replace(/\\/g,'/').toLocaleLowerCase() : value;
+  const sources = new Set(), conflicts = new Set();
+  for (const row of rows) {
+    const source = normalize(row[1]);
+    if (sources.has(source)) conflicts.add(source);
+    sources.add(source);
+  }
+  for (const source of sources) {
+    for (let sep = source.lastIndexOf('/'); sep > 0; sep = source.lastIndexOf('/',sep-1)) {
+      const ancestor = source.slice(0,sep);
+      if (sources.has(ancestor)) {conflicts.add(source); conflicts.add(ancestor);}
+    }
+  }
+  return {rows,pending,reviewOnly,kept,conflicts};
+}
+function showReview() {
+  const r = collectReview();
+  exportRows = r.conflicts.size ? [] : r.rows;
+  const sections = [
+    ['已连到目录',r.rows.map(row => `${row[1]} → ${row[2]}`)],
+    ['待连',r.pending],['仅复核（缺少已确认来源）',r.reviewOnly],['保持原位',r.kept],
+  ];
+  $('reviewStatus').textContent = r.conflicts.size
+    ? '来源有重复或父子冲突，请断开冲突连线后再下载动作表。'
+    : `${r.rows.length} 个动作可下载，${r.pending.length} 项待连。请先用 --dry-run --receipt plan.packtidy-receipt.json 预演，再使用同一清单执行。`;
+  $('reviewText').textContent = sections.map(([name,items]) => `## ${name}（${items.length}）\n${items.join('\n') || '（无）'}`).join('\n\n');
+  $('downloadActions').disabled = !exportRows.length;
+  const changed = [];
+  for (const g of groups) {
+    const proposedKey = g.suggest.target;
+    const proposed = proposedKey ? label(proposedKey) : g.suggest.label;
+    if (!proposed) continue;
+    const units = g.units.length ? g.units : [{key:g.id,label:g.name}];
+    for (const u of units) {
+      const target = places.get(u.key);
+      if (!target) continue;
+      const chosen = label(target);
+      if (proposedKey ? target !== proposedKey : chosen !== proposed) changed.push({g,u,proposed,chosen});
+    }
+  }
+  $('correctionRows').innerHTML=changed.map(({g,u,proposed,chosen})=>`<div class="correction-row" data-node-name="${esc(g.node.name)}" data-group-name="${esc(g.name)}" data-unit-name="${esc(u.label)}"><strong>${esc(g.name)} · ${esc(u.label)}</strong><label>这是什么 <input data-correction="what" aria-label="${esc(u.label)}：这是什么"></label><label>建议去向 <input data-correction="proposed" value="${esc(proposed)}"></label><label>已选去向 <input data-correction="chosen" value="${esc(chosen)}"></label></div>`).join('') || '<p>目前没有与建议不同的已选去向。</p>';
+  $('downloadCorrections').disabled=!changed.length;
+  $('review').showModal();
+}
+function download(name,text,type) {
+  const href = URL.createObjectURL(new Blob([text],{type}));
+  const a = document.createElement('a'); a.href = href; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(href),1000);
+}
+function tsv(value) {
+  return /[\t\r\n"]/.test(value) ? '"' + value.replace(/"/g,'""') + '"' : value;
+}
+$('reviewButton').addEventListener('click',showReview);
+$('undoButton').addEventListener('click',()=>{if(undoStack.length) restore(undoStack.pop(),redoStack);});
+$('redoButton').addEventListener('click',()=>{if(redoStack.length) restore(redoStack.pop(),undoStack);});
+$('downloadReview').addEventListener('click',() => download('packtidy-review.md','# PackTidy 整理复核清单\n\n'+$('reviewText').textContent,'text/markdown;charset=utf-8'));
+$('downloadActions').addEventListener('click',() => {
+  if (exportRows.length) download('packtidy-actions.tsv','op\tsrc\tdst\treason\n'+exportRows.map(row => row.map(tsv).join('\t')).join('\n')+'\n','text/tab-separated-values;charset=utf-8');
+});
+$('downloadCorrections').addEventListener('click',()=>{
+  const rows=[...$('correctionRows').querySelectorAll('.correction-row')];
+  if(!rows.length) return;
+  const header=['what_this_is','node','group','unit','proposed_destination_label','chosen_destination_label'];
+  const body=rows.map(row=>[row.querySelector('[data-correction="what"]').value,row.dataset.nodeName,row.dataset.groupName,row.dataset.unitName,row.querySelector('[data-correction="proposed"]').value,row.querySelector('[data-correction="chosen"]').value]);
+  // Treat free-form labels and notes as text when opened in a spreadsheet.
+  const content = [header,...body].map(row => row.map(value =>
+    tsv(/^\s*[=+@-]/.test(value) ? "'" + value : value)).join('\t')).join('\n');
+  download('packtidy-classification-corrections.tsv',content+'\n','text/tab-separated-values;charset=utf-8');
+});
+$('proposalsButton').addEventListener('click',() => {
+  const list = Object.entries(DATA.proposedCategories);
+  $('proposalList').innerHTML = list.map(([name,p]) => `<li><strong>${esc(name)}</strong>
+    <div class="meta">${esc(p.count)} 组${p.basis ? ' · '+esc(p.basis) : ''}</div>
+    <div>${esc((Array.isArray(p.members) ? p.members : []).join(' · '))}</div></li>`).join('') || '<li>目前没有候选类别。</li>';
+  $('proposals').showModal();
+});
+window.foState = () => ({total:unitKeys.size,linked:places.size,placements:Object.fromEntries(places)});
+window.foPending = () => groups.filter(g => state(g).count < g.keys.length).map(g => ({node:g.node.name,group:g.name}));
+refresh();
+</script>
+</body>
+</html>
+

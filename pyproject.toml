@@ -35,3 +35,9 @@ archives = ["rarfile>=4.0", "py7zr>=1.0"]
 
 [tool.setuptools]
 py-modules = ["packtidy"]
+packages = ["core", "rules"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+core = ["wire_ui.html"]
+rules = ["default.json"]

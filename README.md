@@ -27,7 +27,7 @@ S6  覆盖检查  确认没有节点被跳过
 
 ## 它不做什么
 
-- **不删除用户原有文件或目录。** 空目录只报告；撤销允许移除本次新建、身份匹配且仍为空的目录。
+- **没有独立删除动作。** 空目录只报告。撤销可移除本次创建且仍为空的目录；显式跨卷移动验证目标副本后清理其原件。
 - **不为整理好看而动结构。** 目标是"以后找得到"。
 - **不猜。** 拿不准就 `uncertain`，报给人。
 - **不把「乱」和「还没整理完」当同一件事。** 后者由用户标记为 `WORKSPACE`。
@@ -74,7 +74,7 @@ PowerShell 脚本使用 UTF-8 BOM，兼容 Windows PowerShell 5.1 和 PowerShell
 
 ## 快速开始
 
-统一入口 `packtidy.py`，七个子命令对应六个阶段：
+统一入口 `packtidy.py`。以下是主流程命令，其他命令可用 `--help` 查看。
 
 ```bash
 # 看盘上一级目录有什么（零成本，只读）
@@ -86,19 +86,26 @@ python packtidy.py scan /mnt/disk/some-dir --json
 # 从探针结果生成待批清单
 python packtidy.py plan /mnt/disk --dry-run
 
-# 生成决策界面（浏览器打开）
+# 生成连线工作台（自动读取已有的 decisions.json）
 python packtidy.py ui /mnt/disk --open
 
 # 执行 / 撤销 / 中断恢复
-python packtidy.py apply /mnt/disk --actions plan.tsv --dry-run
+python packtidy.py apply /mnt/disk --actions plan.tsv --dry-run --receipt plan.packtidy-receipt.json
 python packtidy.py undo --journal /mnt/disk/_organize/journal.tsv --last --dry-run
 python packtidy.py recover /mnt/disk
 ```
 
 也可以直接用模块：`python core/signals.py <dir> --json`
 
-**注意**：`plan` 和 `ui` 读取 `_organize/probe/*.json`——那些文件由 AI 代理执行
-`references/probe-task.md` 等任务时产出。没有探针结果时，这两个命令会报「没有归组结果」。
+`plan` 和 `ui` 读取 AI 代理执行 `references/probe-task.md` 等任务时生成的 `_organize/probe/*.json`。
+工作台左侧是分组和单元，右侧是目标。拖动圆点或依次点选两端即可连线。整组连线只填未分配项，需要重设时用「覆盖整组去向」。点线或用「断开」可解除分配，顶部按钮可撤销或重做本次打开页面以来的连线操作。展开分组可看验证级别、规则证据与已回填的 AI 判断链。`--decisions` 可指定另存的 S4 结果。
+
+工作台可以下载复核清单及四列动作表。动作表只包含已有明确去向且能与 S2 清点核对的单元。复核时也可把手动纠正的建议导出为本地样本，补写「这是什么」后留作分类回归。
+
+需要让纠正样本参与规则回归时，可参考 `cases/baseline.json` 里的 ComfyUI 和语音工具链用例，把纠正后的去向写入独立用例的 `expectTarget`，并保留当时容易混淆的候选区，再运行 `python packtidy.py verify run <本地用例.json>`。
+
+`plan` 默认读取根目录下的 `_organize/policy.json`。`--policy` 可覆盖审批设置并追加禁区，根目录的保护规则仍然生效。
+再次生成计划时，如果已有 `plan.tsv` 且没有可批准动作，会把它更新为空表。
 
 ## 一个完整的例子
 
@@ -113,18 +120,20 @@ python packtidy.py scan /mnt/disk/新建文件夹
 #   → [到达聚集] 73% 同秒 (2025-01-24 18:18:28)
 #   → [构成] 6 文件 / 1 目录 / 2 种类型
 
-# 3. 生成界面，默认值已填好，只改标黄的几项
+# 3. 打开工作台，确认去向并下载动作表
 python packtidy.py ui /mnt/disk --open
 
 # 4. 先预演，再执行
-python packtidy.py apply /mnt/disk --actions plan.tsv --dry-run
-python packtidy.py apply /mnt/disk --actions plan.tsv
+python packtidy.py apply /mnt/disk --actions plan.tsv --dry-run --receipt plan.packtidy-receipt.json
+python packtidy.py apply /mnt/disk --actions plan.tsv --receipt plan.packtidy-receipt.json
 
 # 5. 不满意就撤
 python packtidy.py undo --journal /mnt/disk/_organize/journal.tsv --last
 ```
 
 ## 动作表格式
+
+`--receipt` 在预演时将源身份和最终落点写入一个新 JSON 文件，在正式执行时核对同一份清单。发现拦截项、源被替换或最终落点变化时，整份清单会在启动文件移动前停止。清单请放在现有工作目录里，重新预演时换一个文件名。
 
 审批完成后用四列 TSV 执行。`move` 的 dst 是目录，`rename` 的 dst 是新文件名，
 `mkdir` 的 dst 是绝对路径（各列必须用制表符分隔）：
@@ -139,13 +148,25 @@ mkdir   -                       /mnt/disk/归档           下载暂存区拆分
 也支持 PowerShell 封装：
 
 ```powershell
-pwsh -File scripts/apply.ps1 -Root G:\ -Actions actions.tsv -DryRun
+pwsh -File scripts/apply.ps1 -Root G:\ -Actions actions.tsv -DryRun -Receipt plan.packtidy-receipt.json
+pwsh -File scripts/apply.ps1 -Root G:\ -Actions actions.tsv -Receipt plan.packtidy-receipt.json
 pwsh -File scripts/undo.ps1 -Journal journal.tsv -Last -DryRun
 pwsh -File scripts/recover.ps1 -Root G:\
 ```
 
 **`split` 不会自动展开**——必须先按最小单元归组、生成明确的动作表。
 理由见 `references/judgment.md`：按扩展名拆分必然拆散引擎资源。
+
+### 显式跨卷移动
+
+动作表中的 `move` 目标必须是另一卷上已存在的目录。执行时同时传入开关和已授权的目标根。可重复指定目标根。
+
+```powershell
+python packtidy.py apply "D:\整理区" --actions actions.tsv --allow-cross-drive --destination-root "E:\归档区" --dry-run --receipt cross.packtidy-receipt.json
+pwsh -File scripts/apply.ps1 -Root "D:\整理区" -Actions actions.tsv -AllowCrossDrive -DestinationRoot "E:\归档区" -Receipt cross.packtidy-receipt.json
+```
+
+工具会验证暂存副本再发布目标，随后隔离原件并逐项复核后清理。恢复和撤销仍用源整理根及其日志。跨卷目标已有同名对象会拦截。发布前中断时，原件仍在原路径，暂存副本留在目标根的 `_organize/cross-volume`。
 
 ## 目录结构
 
@@ -159,7 +180,9 @@ core/
   signals.py                可代码化的判据 → 输出事实 JSON
   coverage.py               覆盖检查：有没有节点被跳过
   decisions.py              S4 建议：每组该去哪，含新建分类的归属规划
-  ui.py                     生成决策界面（单文件 HTML，跟随系统主题）
+  ui.py                     读取阶段产物，生成连线工作台
+  wire_ui.html              随安装包提供的离线界面模板
+  cross_volume.py           跨卷暂存、校验及原件清理
 references/
   probe-task.md             S1 判定任务
   unit-inventory.md         S2 清点任务
@@ -186,11 +209,12 @@ reason 列使用 JSON 保存人工依据、事务编号、文件身份和逆操�
 **按操作状态撤销。** 撤销通过原始 seq 关联日志，重复撤销跳过已经撤销的项；对撤销产生的 run 再执行 undo 即可重做。
 文件对象已被替换或修改时保留现场；冲突不覆盖。原有八列日志仍可读取/列出，但缺少身份信息的旧动作不会被自动撤销。
 `undo -Seq N` 仅选择编号不大于 N 的原始正向动作，不把历史撤销/重做再次混入范围；需要重做时指定撤销产生的 RunId 或使用 Last。
-保护标记的双写也有独立恢复记录，写入中断时会阻止后续整理，recover 会完成已记录的标记更新。
+保护标记的双写也有独立恢复记录。写入中断或主标记缺失时会阻止后续整理，`recover` 会完成已记录的更新或从镜像补回主标记。
 
-**删除永不自动。** `policy.json` 里删除默认关闭。
+**删除从不作为单独动作生成。** 跨卷移动只清理可核对且目标副本已验证的原件。
 
 **凭据隔离。** `SECRET` 标记的文件及其父目录不移动，拦截结果不输出凭据路径；NOTE 不能解除保护。
+`setup` 保存的 `no_go_zones` 也受保护，可使用根目录内的绝对路径或相对根目录的路径。
 源、目标及沿途目录的链接、Junction、重解析点都会被拒绝，目录内部包含这些项也不能整体移动。
 凭据可能藏在任何地方——随机名目录、备份归档深处、微信年月子目录。
 建议把凭据扫描当独立步骤，不靠探针顺带发现。
@@ -202,7 +226,7 @@ reason 列使用 JSON 保存人工依据、事务编号、文件身份和逆操�
 
 - **不做内容语义判断。** 它不知道"这张照片拍的是什么"，只知道文件结构。
 - **跨平台尚未完整验证。** Windows PowerShell 5.1/7 已做集成测试，macOS/Linux 接口未实机验证。
-- **只支持同卷移动。** 旧参数 `-AllowCrossDrive` 会明确拒绝；不支持用户文件全量复制/删除。
+- **跨卷对象限制。** 当前支持 Windows 本地 NTFS 固定磁盘。跨卷移动接受可保真的普通文件和目录，遇到重解析点、硬链接、备用数据流、扩展属性或权限不匹配会停止。会核对可查询权限，审计 SACL 不在保真范围。
 - **日志不是备份。** 对象被外部替换、日志历史分歧或其他无法证明的状态需要人工核对，不猜测恢复。
 - **故障验证范围。** 测试覆盖进程中断和模拟写入失败；没有做真实断电、硬件损坏或外置盘强制拔出测试，不承诺硬件故障下的完整恢复。
 - **并发边界。** 同一根目录的工具操作共用锁；整理期间应暂停其他会修改同一路径的下载、同步或手工操作。工具不会覆盖竞争出现的目标。

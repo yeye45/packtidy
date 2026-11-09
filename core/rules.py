@@ -59,13 +59,14 @@ def validate(data):
     # 新版本写的规则包，旧版本应该能用了解的字段，忽略不认识的
     unknown = set(data) - REQUIRED - OPTIONAL - {
         k for k in data if k.startswith("_")}
-    warnings = []
     if unknown:
         warnings.append(f"未知字段（忽略）: {', '.join(sorted(unknown))}")
 
     # 类型检查
-    if "version" in data and not isinstance(data["version"], int):
+    if "version" in data and (not isinstance(data["version"], int) or isinstance(data["version"], bool)):
         problems.append("version 必须是整数")
+    if "minPacktidy" in data and not isinstance(data["minPacktidy"], str):
+        problems.append("minPacktidy 必须是字符串")
     if "protected" in data:
         v = data["protected"]
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
@@ -81,18 +82,40 @@ def validate(data):
                 if not isinstance(info, dict):
                     problems.append(f"categories.{name} 必须是对象")
                     continue
-                if "keys" not in info or not isinstance(info["keys"], list):
+                if "keys" not in info or not isinstance(info["keys"], list) or not all(isinstance(x, str) for x in info["keys"]):
                     problems.append(f"categories.{name} 需要 keys 数组")
-                if "suggest" in info and not isinstance(info["suggest"], list):
-                    problems.append(f"categories.{name}.suggest 必须是数组")
+                if "suggest" in info and (not isinstance(info["suggest"], list) or not all(isinstance(x, str) for x in info["suggest"])):
+                    problems.append(f"categories.{name}.suggest 必须是字符串数组")
+
+    for field in ("nestedAllow", "nestedDeny", "categoryNodes"):
+        if field in data and (not isinstance(data[field], list) or not all(isinstance(x, str) for x in data[field])):
+            problems.append(f"{field} 必须是字符串数组")
+    if "crossRules" in data:
+        if not isinstance(data["crossRules"], list):
+            problems.append("crossRules 必须是数组")
+        else:
+            for i, item in enumerate(data["crossRules"]):
+                if not isinstance(item, dict) or any(
+                    not isinstance(item.get(field), list) or
+                    any(not isinstance(value, str) for value in item[field])
+                    for field in ("keys", "to")
+                ):
+                    problems.append(f"crossRules[{i}] 需要 keys/to 字符串数组")
+    if "newCategories" in data:
+        if not isinstance(data["newCategories"], dict):
+            problems.append("newCategories 必须是对象")
+        else:
+            for name, info in data["newCategories"].items():
+                if not isinstance(info, dict) or not isinstance(info.get("keys"), list) or not all(isinstance(x, str) for x in info.get("keys", [])):
+                    problems.append(f"newCategories.{name} 需要 keys 字符串数组")
 
     if "mapping" in data:
         v = data["mapping"]
         if not isinstance(v, dict):
             problems.append("mapping 必须是对象")
         else:
-            cats = set(data.get("categories", {})) - {
-                k for k in data.get("categories", {}) if k.startswith("_")}
+            categories = data.get("categories")
+            cats = {k for k in categories if not k.startswith("_")} if isinstance(categories, dict) else set()
             for name, target in v.items():
                 if name.startswith("_"):
                     continue
@@ -104,11 +127,18 @@ def validate(data):
     return (not problems), problems + warnings
 
 
-def load(path=None):
-    """加载规则包。找不到就返回空结构（用内置默认）。"""
-    p = Path(path) if path else DEFAULT_RULES
+def _cache_path():
+    # Resolve at call time so applications/tests that set LOCALAPPDATA after
+    # importing this module still use the intended per-user cache.
+    return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "packtidy" / "rules" / "remote.json"
+
+
+def _load_file(p, missing_ok=False):
+    p = Path(p)
     if not p.is_file():
-        return {"_missing": True, "version": 0}
+        if missing_ok:
+            return {"_missing": True, "version": 0}
+        raise RulesError(f"规则包不存在: {p}")
     try:
         data = json.loads(p.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
@@ -117,6 +147,62 @@ def load(path=None):
     if not ok:
         raise RulesError("规则包格式错误:\n  " + "\n  ".join(problems))
     return data
+
+
+def load(path=None):
+    """显式路径优先；无参时依次加载同步缓存、内置规则。"""
+    if path is not None:
+        return _load_file(path, missing_ok=True)
+    cached = _cache_path()
+    if cached.is_file():
+        return _load_file(cached)
+    return _load_file(DEFAULT_RULES, missing_ok=True)
+
+
+def load_root_policy(root):
+    """读取 root 的 policy；文件缺失返回空对象，损坏或链接拒绝。"""
+    p = Path(root) / "_organize" / "policy.json"
+    try:
+        from safety import assert_no_links
+        assert_no_links(p)
+    except ImportError:
+        pass
+    except Exception as exc:
+        raise RulesError(f"policy.json 路径不安全: {exc}") from exc
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise RulesError(f"policy.json 无法解析: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RulesError("policy.json 顶层必须是对象")
+    return data
+
+
+def load_for_root(root, policy=None):
+    """按 root 的规则选择：policy.rules、同步缓存、内置规则。"""
+    root = Path(root)
+    policy_file = root / "_organize" / "policy.json"
+    policy = load_root_policy(root) if policy is None else policy
+    if not isinstance(policy, dict):
+        raise RulesError("policy 必须是对象")
+    if "rules" in policy:
+        spec = policy["rules"]
+        if not isinstance(spec, str) or not spec.strip():
+            raise RulesError("policy.json 的 rules 必须是非空路径字符串")
+        p = Path(spec)
+        if not p.is_absolute():
+            p = policy_file.parent / p
+        try:
+            from safety import assert_no_links
+            assert_no_links(p)
+        except ImportError:
+            pass
+        except Exception as exc:
+            raise RulesError(f"规则路径不安全: {exc}") from exc
+        return _load_file(p, missing_ok=False)
+    return load()
 
 
 def apply_to(data, safety_mod=None, decisions_mod=None):
@@ -203,7 +289,9 @@ def cmd_show(args):
         print("未找到规则包，使用内置默认")
         return 0
 
-    print(f"规则包: {args.file or DEFAULT_RULES}")
+    cached = _cache_path()
+    source = args.file or (cached if cached.is_file() else DEFAULT_RULES)
+    print(f"规则包: {source}")
     print(f"  版本    {data.get('version')}")
     print(f"  更新    {data.get('updated', '—')}")
     print(f"  兼容    packtidy >= {data.get('minPacktidy')}")
@@ -266,8 +354,8 @@ def cmd_sync(args):
             print(f"  - {p}", file=sys.stderr)
         return 1
 
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    out = CACHE_DIR / "remote.json"
+    out = _cache_path()
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"已缓存: {out}")

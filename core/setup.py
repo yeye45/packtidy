@@ -25,6 +25,10 @@ import os
 import sys
 from pathlib import Path
 
+from executor import atomic_write
+from rules import load_root_policy
+from safety import SafetyError, assert_no_links, normal, within
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -150,25 +154,39 @@ def cmd_ask(args):
 
 
 def cmd_apply(args):
-    root = args.root
     try:
         answers = json.loads(Path(args.answers).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
         print(f"答案文件无法读取: {exc}", file=sys.stderr)
         return 1
 
-    p = find_policy(root)
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    policy = {}
-    if p.is_file():
-        try:
-            policy = json.loads(p.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError):
-            policy = {}
+    if not isinstance(answers, dict) or not isinstance(answers.get("setup", answers), dict):
+        print("答案文件需要 JSON 对象", file=sys.stderr)
+        return 1
+    answers = answers.get("setup", answers)
+    try:
+        root = Path(normal(args.root))
+        assert_no_links(root)
+        if not root.is_dir():
+            raise SafetyError("整理根目录不存在")
+        policy = load_root_policy(root)
+        if not isinstance(policy.get("setup", {}), dict):
+            raise SafetyError("现有 policy 的 setup 必须是对象")
+        if "no_go_zones" in answers:
+            zones = answers["no_go_zones"]
+            if isinstance(zones, str):
+                zones = [zones] if zones.strip() else []
+            if not isinstance(zones, list) or any(not isinstance(p, str) or not p.strip() for p in zones):
+                raise SafetyError("禁区必须是路径数组")
+            if any(not within(root/path, root) for path in zones):
+                raise SafetyError("禁区路径必须位于整理根目录内")
+            answers["no_go_zones"] = zones
+    except (OSError, ValueError) as exc:
+        print(f"无法保存整理设置: {exc}", file=sys.stderr)
+        return 1
 
     setup = policy.get("setup") or {}
-    setup.update(answers.get("setup") or answers)
+    setup.update(answers)
     policy["setup"] = setup
 
     # 把关键回答转成实际配置
@@ -194,11 +212,11 @@ def cmd_apply(args):
         mapping.setdefault("install_tool", "装机工具")
 
     no_go = setup.get("no_go_zones")
-    if isinstance(no_go, list) and no_go:
+    if isinstance(no_go, list):
         policy["no_go_zones"] = no_go
 
-    p.write_text(json.dumps(policy, ensure_ascii=False, indent=2),
-                 encoding="utf-8")
+    p = find_policy(root)
+    atomic_write(p, json.dumps(policy, ensure_ascii=False, indent=2).encode("utf-8"))
 
     print(f"已写入 {p}")
     print(f"  回答了 {len(setup)} 个问题")

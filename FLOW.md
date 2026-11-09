@@ -560,15 +560,15 @@ python packtidy.py ui /path --open
 ### 预演
 
 ```bash
-python packtidy.py apply /path --actions plan.tsv --dry-run
+python packtidy.py apply /path --actions plan.tsv --dry-run --receipt plan.packtidy-receipt.json
 ```
 
-预演结果先全部列出来，再执行剩下的。
+预演会列出最终路径，包括同卷同名时分配的后缀。所有动作通过预检后，才将源身份、最终落点及动作表校验写入新清单。
 
 ### 预检（全部拦在动手之前）
 
 ```
-路径出 root          → 拦
+路径超出源 root 或显式授权的跨卷目标根 → 拦
 命中 PACKAGED 名字表  → 拦
 命中 SECRET/FOREIGN/WORKSPACE/NO_TOUCH/ASK → 拦
 跨盘（未显式允许）    → 拦
@@ -578,8 +578,10 @@ rename 的 dst 含分隔符 → 拦
 ### 执行
 
 ```bash
-python packtidy.py apply /path --actions plan.tsv
+python packtidy.py apply /path --actions plan.tsv --receipt plan.packtidy-receipt.json
 ```
+
+`ui` 可下载已连单元的四列动作表。执行会先核对整份清单，遇到动作变更或预检拦截时停止，处理后用新文件名重新预演。跨卷移动需在两次命令中都传 `--allow-cross-drive` 与 `--destination-root`，并使用目标卷上的现有目录。中断从源整理根运行 `recover`。
 
 **动作类型只有三种**（没有删除）：
 
@@ -611,7 +613,7 @@ python packtidy.py undo --journal journal.tsv --run-id run-xxx
 | 情况 | 行为 |
 |---|---|
 | 目标不在 | 跳过并记录，不报错 |
-| 原位置已有同名 | **不覆盖**，自动改名为 `原名_1.ext`（`_2`、`_3` 递增） |
+| 移动的原位置已有同名 | 记录冲突，保留现有两边 |
 | rename 撤销时原名被占 | 改用 `<原名>_undone<扩展名>` |
 | mkdir 撤销时目录非空 | 保留，记 skip |
 
@@ -785,8 +787,8 @@ python core/decisions.py --root /path --answers ai.json   回填
 python packtidy.py ui /path --open      人看界面
 
 # 执行
-python packtidy.py apply /path --actions plan.tsv --dry-run
-python packtidy.py apply /path --actions plan.tsv
+python packtidy.py apply /path --actions plan.tsv --dry-run --receipt plan.packtidy-receipt.json
+python packtidy.py apply /path --actions plan.tsv --receipt plan.packtidy-receipt.json
 python packtidy.py undo --journal j.tsv --last
 python packtidy.py recover /path
 

@@ -219,6 +219,72 @@ class TransactionCase(unittest.TestCase):
             self.assertTrue(blocked)
         self.assertTrue((source/'file.txt').exists())
 
+    def test_policy_no_go_zones_accept_relative_and_absolute_and_reject_escape(self):
+        source = self.put('allowed/file.txt').parent
+        (self.root/'_organize').mkdir(exist_ok=True)
+        policy_path = self.root/'_organize'/'policy.json'
+        for zone in ('allowed', str(source)):
+            policy_path.write_text(json.dumps({'no_go_zones': [zone]}), encoding='utf-8')
+            prepared, blocked = executor.preflight(
+                self.root, [dict(op='rename', src=str(source), dst='renamed', reason='test')])
+            self.assertFalse(prepared)
+            self.assertEqual(len(blocked), 1)
+        policy_path.write_text(json.dumps({'no_go_zones': ['../outside']}), encoding='utf-8')
+        with self.assertRaises(SafetyError):
+            executor.preflight(self.root, [dict(op='rename', src=str(source), dst='renamed', reason='test')])
+        policy_path.write_text(json.dumps({'no_go_zones': 'allowed'}), encoding='utf-8')
+        with self.assertRaises(SafetyError):
+            executor.preflight(self.root, [dict(op='rename', src=str(source), dst='renamed', reason='test')])
+
+    def test_apply_stops_on_missing_primary_markers_and_recover_restores_from_mirror(self):
+        source = self.put('before.txt')
+        markers = self.root/'_organize'/'markers.tsv'
+        markers.parent.mkdir(parents=True, exist_ok=True)
+        markers.write_text('path\tkind\tby\tnote\tts\n', encoding='utf-8')
+        self.journal.mirror_dir.mkdir(parents=True, exist_ok=True)
+        self.journal.mirror_dir.joinpath('markers.tsv').write_bytes(markers.read_bytes())
+        markers.unlink()
+        actions = self.put('_organize/actions.tsv',
+                           f'op\tsrc\tdst\treason\nrename\t{source}\tafter.txt\ttest\n')
+        args = Namespace(root=str(self.root), actions=str(actions), rename=None, plan=None,
+                         reason='-', batch_size=20, allow_cross_drive=False, dry_run=False)
+        with self.assertRaises(SafetyError):
+            executor.apply(args)
+        self.assertTrue(source.exists())
+        self.assertEqual(self.recover(), 0)
+        self.assertTrue(markers.exists())
+        self.assertEqual(markers.read_bytes(), self.journal.mirror_dir.joinpath('markers.tsv').read_bytes())
+
+    def test_rule_pack_adds_protection_without_removing_builtin_protection(self):
+        source = self.put('custom-zone/file.txt').parent
+        local = self.base/'local'/'packtidy'/'rules'
+        local.mkdir(parents=True)
+        package = {
+            'version': 2, 'minPacktidy': '0.1.0',
+            'protected': ['custom-zone'], 'categories': {'x': {'keys': ['x']}}
+        }
+        (local/'remote.json').write_text(json.dumps(package), encoding='utf-8')
+        built_in_source = self.put('Windows/important.txt').parent
+        prepared, blocked = executor.preflight(self.root, [
+            dict(op='rename', src=str(source), dst='custom-renamed', reason='test'),
+            dict(op='rename', src=str(built_in_source), dst='safe-renamed', reason='test'),
+        ])
+        self.assertFalse(prepared)
+        self.assertEqual(len(blocked), 2)
+
+    def test_parent_and_child_sources_preflight_as_one_ready_one_conflict(self):
+        parent = self.put('A/child/file.txt').parents[1]
+        child = parent/'child'
+        destination = self.root/'B'
+        destination.mkdir()
+        prepared, blocked = executor.preflight(self.root, [
+            dict(op='move', src=str(parent), dst=str(destination), reason='parent'),
+            dict(op='move', src=str(child), dst=str(destination), reason='child'),
+        ])
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(len(blocked), 1)
+        self.assertTrue(parent.exists())
+
     def test_malformed_probe_fails_before_file_move(self):
         source=self.put('before.txt')
         self.put('_organize/probe/bad.json','{')

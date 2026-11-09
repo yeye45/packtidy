@@ -44,6 +44,7 @@ class TestValidate(unittest.TestCase):
     def test_version_must_be_int(self):
         ok, _ = rules.validate(minimal(version="2"))
         self.assertFalse(ok)
+        self.assertFalse(rules.validate(minimal(version=True))[0])
 
     def test_protected_must_be_string_list(self):
         ok, _ = rules.validate(minimal(protected=[1, 2]))
@@ -60,6 +61,10 @@ class TestValidate(unittest.TestCase):
         ok, _ = rules.validate(
             minimal(categories={"a": {"keys": ["k"], "suggest": "x"}}))
         self.assertFalse(ok)
+
+    def test_category_keys_and_suggest_elements_must_be_strings(self):
+        self.assertFalse(rules.validate(minimal(categories={"a": {"keys": [1]}}))[0])
+        self.assertFalse(rules.validate(minimal(categories={"a": {"keys": ["x"], "suggest": [None]}}))[0])
 
     def test_mapping_target_null_allowed(self):
         ok, _ = rules.validate(
@@ -113,6 +118,48 @@ class TestLoad(unittest.TestCase):
             p.write_text(json.dumps({"version": 2}), encoding="utf-8")
             with self.assertRaises(rules.RulesError):
                 rules.load(p)
+
+    def test_load_uses_dynamic_cache(self):
+        with tempfile.TemporaryDirectory() as d:
+            old = os.environ.get("LOCALAPPDATA")
+            try:
+                os.environ["LOCALAPPDATA"] = d
+                p = Path(d) / "packtidy" / "rules" / "remote.json"
+                p.parent.mkdir(parents=True)
+                p.write_text(json.dumps(minimal(version=7)), encoding="utf-8")
+                self.assertEqual(rules.load()["version"], 7)
+            finally:
+                if old is None:
+                    os.environ.pop("LOCALAPPDATA", None)
+                else:
+                    os.environ["LOCALAPPDATA"] = old
+
+    def test_root_policy_relative_rules_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            org = root / "_organize"
+            org.mkdir()
+            (org / "custom.json").write_text(json.dumps(minimal(version=8)), encoding="utf-8")
+            (org / "policy.json").write_text(json.dumps({"rules": "custom.json"}), encoding="utf-8")
+            self.assertEqual(rules.load_for_root(root)["version"], 8)
+
+    def test_root_policy_missing_target_is_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            org = root / "_organize"
+            org.mkdir()
+            (org / "policy.json").write_text(json.dumps({"rules": "missing.json"}), encoding="utf-8")
+            with self.assertRaises(rules.RulesError):
+                rules.load_for_root(root)
+
+    def test_corrupt_root_policy_is_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            org = root / "_organize"
+            org.mkdir()
+            (org / "policy.json").write_text("{bad", encoding="utf-8")
+            with self.assertRaises(rules.RulesError):
+                rules.load_root_policy(root)
 
 
 class FakeMod:

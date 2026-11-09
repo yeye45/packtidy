@@ -8,17 +8,22 @@ Interrupted operations block further work until `recover` reconciles them.
 import argparse
 from contextlib import contextmanager
 import csv
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import tempfile
 import uuid
 
-from safety import (SafetyError, MARKER_FIELDS, PROTECTED_NAMES, assert_no_links,
+import cross_volume
+import rules
+from safety import (SafetyError, MARKER_FIELDS, NESTED_DENY, PROTECTED_NAMES, assert_no_links,
                     nested_verdict,
                     block_kind, encode_tsv, is_reparse, key, load_markers,
                     normal, read_tsv, replace_path, within)
@@ -53,6 +58,49 @@ def same_identity(path, expected, content=False):
     if content and not actual['dir']:
         names += ('size', 'mtime_ns')
     return all(actual[n] == expected[n] for n in names)
+
+
+def reviewed_identity(path):
+    st = os.stat(path, follow_symlinks=False)
+    if stat.S_ISLNK(st.st_mode) or getattr(st, 'st_file_attributes', 0) & 0x400:
+        raise SafetyError('预演中的源已消失或变为链接')
+    if not st.st_ino:
+        raise SafetyError('文件系统未提供稳定对象编号，拒绝确认预演')
+    return dict(dev=st.st_dev, ino=st.st_ino, size=st.st_size, mtime_ns=st.st_mtime_ns,
+                change_ns=st.st_ctime_ns, mode=st.st_mode)
+
+
+def reviewed_source(path):
+    root = Path(path)
+    found = reviewed_identity(root)
+    result = {'identity': found}
+    if not stat.S_ISDIR(found['mode']):
+        return result
+    checksum = hashlib.sha256()
+    directories = [root]
+    while directories:
+        for child in sorted(directories.pop().iterdir()):
+            child_id = reviewed_identity(child)
+            if stat.S_ISDIR(child_id['mode']):
+                directories.append(child)
+            entry = (child.relative_to(root).as_posix(), child_id)
+            checksum.update(json.dumps(entry, sort_keys=True).encode('ascii') + b'\n')
+    if reviewed_identity(root) != found:
+        raise SafetyError('采集预演清单时源目录发生变化，请重新预演')
+    result['tree_sha256'] = checksum.hexdigest()
+    return result
+
+
+def directory_identity(path):
+    found = identity(path)
+    if not found['dir'] or is_reparse(path):
+        raise SafetyError('预演中的目标父目录不是普通目录')
+    return {field: found[field] for field in ('dev', 'ino', 'dir')}
+
+
+def check_reviewed_parent(path, expected):
+    if not same_identity(path, expected):
+        raise SafetyError('目标父目录在预演后发生变化，请重新预演')
 
 
 def digest(data):
@@ -193,8 +241,29 @@ class Journal:
         self.mirror = self.mirror_dir/'journal.tsv'
         self.tx_dir = self.root/'_organize/transactions'
 
+    def check_marker_files(self, repair=False):
+        primary = self.root/'_organize/markers.tsv'
+        mirror = self.mirror_dir/'markers.tsv'
+        assert_no_links(primary)
+        assert_no_links(mirror)
+        if primary.exists():
+            return
+        if mirror.exists():
+            if not repair:
+                raise SafetyError('主保护标记缺失；请先运行 recover')
+            read_tsv(mirror, MARKER_FIELDS)
+            atomic_write(primary, mirror.read_bytes())
+        elif any((d/'marker-update.json').exists() for d in (primary.parent, self.mirror_dir)):
+            raise SafetyError('主保护标记和镜像均缺失；请先人工核对保护标记')
+
+    def protection(self, policy=None):
+        if self.pending_marker_update():
+            raise SafetyError('保护标记写入尚未完成；先运行 recover')
+        self.check_marker_files()
+        return load_protection(self.root, policy)
+
     @contextmanager
-    def locked(self, repair=False):
+    def locked(self, repair=False, prepare=True):
         assert_no_links(self.path)
         assert_no_links(self.mirror_dir)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,7 +285,8 @@ class Journal:
             except OSError as exc:
                 raise SafetyError('已有执行或撤销进程正在使用此目录') from exc
             try:
-                self.ensure_ready(repair=repair)
+                if prepare:
+                    self.ensure_ready(repair=repair)
                 yield self
             finally:
                 f.seek(0)
@@ -259,6 +329,7 @@ class Journal:
                 self.recover_markers()
             else:
                 raise SafetyError('保护标记写入尚未完成；先运行 recover')
+        self.check_marker_files(repair=repair)
 
     def pending_marker_update(self):
         candidates=[]
@@ -351,14 +422,17 @@ class Journal:
     def validate_manifest(self, tx):
         if not isinstance(tx,dict) or not re.fullmatch('[0-9a-f]{32}',tx.get('id','')):
             raise SafetyError('恢复记录格式无效')
-        if tx.get('effect') not in ('move','mkdir','rmdir'):
+        if tx.get('effect') not in ('move','mkdir','rmdir','cross-move'):
             raise SafetyError('恢复记录动作无效')
         if tx.get('staging') and not within(tx['staging'],self.root/'_organize/staging',inclusive=False):
             raise SafetyError('恢复暂存路径越界')
-        for name in ('before','after'):
-            value = tx.get(name)
-            if value != '-' and (not isinstance(value,str) or not within(value,self.root,inclusive=False)):
-                raise SafetyError('恢复记录路径越界')
+        if tx['effect'] == 'cross-move':
+            cross_scopes(self.root, tx.get('cross', {}), tx.get('before'), tx.get('after'))
+        else:
+            for name in ('before','after'):
+                value = tx.get(name)
+                if value != '-' and (not isinstance(value,str) or not within(value,self.root,inclusive=False)):
+                    raise SafetyError('恢复记录路径越界')
         for edit in tx.get('edits',[]):
             path = edit.get('path','')
             if not (key(path)==key(self.root/'_organize/markers.tsv') or
@@ -368,13 +442,41 @@ class Journal:
                 raise SafetyError('恢复引用内容校验失败')
 
 
-def guard(path, root, markers, descendants=False, allow_root=False):
+@dataclass
+class Protection:
+    markers: list
+    extra_names: set
+
+
+def load_protection(root, policy=None):
+    policy = rules.load_root_policy(root) if policy is None else policy
+    pack = rules.load_for_root(root, policy=policy)
+    extra_names = ({name.casefold() for name in pack.get('protected', [])} - PROTECTED_NAMES)
+    extra_names.update({name.casefold() for name in pack.get('nestedDeny', [])} - NESTED_DENY)
+    markers = load_markers(root) + no_go_markers(root, policy)
+    return Protection(markers, extra_names)
+
+
+def no_go_markers(root, policy):
+    no_go = policy.get('no_go_zones', [])
+    if not isinstance(no_go, list) or any(not isinstance(p, str) or not p.strip() for p in no_go):
+        raise SafetyError('policy 的 no_go_zones 必须是路径数组')
+    markers = []
+    for path in no_go:
+        path = normal(Path(root)/path)
+        if not within(path, root):
+            raise SafetyError('policy 的禁区路径超出整理根目录')
+        markers.append({'path': path, 'kind': 'NO_TOUCH'})
+    return markers
+
+
+def guard(path, root, protection, descendants=False, allow_root=False):
     if not os.path.isabs(str(path)):
         raise SafetyError('动作路径必须是绝对路径')
     path = normal(path)
     if not within(path, root, inclusive=allow_root):
         raise SafetyError('路径越界或指向整理根目录')
-    kind = block_kind(path, markers, descendants)
+    kind = block_kind(path, protection.markers, descendants)
     if kind:
         raise SafetyError('凭据类路径已排除' if kind == 'SECRET' else '命中保护标记 ' + kind)
     assert_no_links(path)
@@ -382,6 +484,8 @@ def guard(path, root, markers, descendants=False, allow_root=False):
     allowed, why = nested_verdict(path)
     if not allowed:
         raise SafetyError('命中受保护目录：' + why)
+    if any(part.casefold() in protection.extra_names for part in Path(path).parts):
+        raise SafetyError('命中规则包保护目录')
     if descendants and os.path.isdir(path):
         # Never enter a link; fail on read errors instead of assuming an empty tree.
         def fail(exc):
@@ -404,6 +508,8 @@ def guard(path, root, markers, descendants=False, allow_root=False):
                 child = Path(folder)/name
                 if is_reparse(child):
                     raise SafetyError('目录包含链接或重解析项')
+                if name.casefold() in protection.extra_names and child.is_dir():
+                    raise SafetyError('目录包含规则包保护目录')
                 if name.casefold() not in PROTECTED_NAMES or not child.is_dir():
                     continue
                 depth = len(Path(child).relative_to(path).parts)
@@ -484,11 +590,218 @@ def sync_reference_mirror(journal, edits):
             atomic_write(journal.mirror_dir/'markers.tsv',edit['after'].encode('utf-8'))
 
 
-def transaction(journal, run, op, effect, before, after, reason, inverse_of=None):
-    markers = load_markers(journal.root)
+def check_external_root(root, external):
+    if (not isinstance(external, str) or not os.path.isabs(external) or
+            within(external, root) or within(root, external)):
+        raise SafetyError('授权的跨卷目标根必须是与整理根独立的绝对路径')
+    return Path(normal(external))
+
+
+def cross_scopes(root, authority, before, after):
+    if not isinstance(authority, dict):
+        raise SafetyError('跨卷授权记录格式无效')
+    external = check_external_root(root, authority.get('root'))
+    if (not all(isinstance(path, str) and os.path.isabs(path) for path in (before, after)) or
+            not ((within(before, root, inclusive=False) and within(after, external, inclusive=False)) or
+                 (within(before, external, inclusive=False) and within(after, root, inclusive=False)))):
+        raise SafetyError('跨卷移动路径超出已授权的根')
+    return (Path(root), external) if within(before, root) else (external, Path(root))
+
+
+def cross_authority(root, external):
+    assert_no_links(root)
+    assert_no_links(external)
+    for path in (root, external):
+        if not Path(path).is_dir():
+            raise SafetyError('已授权的跨卷根必须是现有目录')
+        cross_volume.require_local_root(path)
+    if not cross_volume.different_volume(root, external):
+        raise SafetyError('外部目标根必须位于其他卷')
+    return dict(root=str(external), root_id=identity(external), journal_root_id=identity(root))
+
+
+def cross_guard(journal, authority, before, after):
+    source_root, target_root = cross_scopes(journal.root, authority, before, after)
+    external = Path(authority['root'])
+    for root, expected in ((journal.root, authority.get('journal_root_id')), (external, authority.get('root_id'))):
+        assert_no_links(root)
+        cross_volume.require_local_root(root)
+        if not same_identity(root, expected):
+            raise SafetyError('跨卷移动的已授权根或卷已变化')
+    primary, other = journal.protection(), Journal(external).protection()
+    markers = primary.markers + other.markers
+    protections = {journal.root: Protection(markers, primary.extra_names),
+                   external: Protection(markers, other.extra_names)}
+    for root in protections:
+        if block_kind(root/'_organize'/'cross-volume', markers, descendants=True):
+            raise SafetyError('跨卷暂存区域命中保护标记')
+    for path, root in ((before, source_root), (after, target_root)):
+        if within(path, root/'_organize'):
+            raise SafetyError('跨卷移动拒绝内部状态目录')
+        if block_kind(path, markers, descendants=True):
+            raise SafetyError('跨卷路径命中两端的保护标记')
+        guard(path, root, protections[root])
+        parent = Path(path).parent
+        if not parent.is_dir() or cross_volume.different_volume(parent, root):
+            raise SafetyError('跨卷移动要求两端的父目录已存在且位于各自的卷')
+
+    def check(relative):
+        if relative != '.':
+            guard(Path(before)/relative, source_root, protections[source_root])
+            guard(Path(after)/relative, target_root, protections[target_root])
+
+    return check
+
+
+@contextmanager
+def cross_lock(journal, authority, before, after):
+    cross_scopes(journal.root, authority, before, after)
+    external = Path(authority['root'])
+    assert_no_links(external)
+    cross_volume.require_local_root(journal.root)
+    cross_volume.require_local_root(external)
+    if not same_identity(external, authority.get('root_id')):
+        raise SafetyError('跨卷移动的已授权根或卷已变化')
+    other = Journal(external)
+    with other.locked(prepare=False):
+        if other.unresolved():
+            raise SafetyError('跨卷目标根存在未完成操作；请先恢复该根')
+        yield
+
+
+def transfer_paths(journal, tx):
+    source, target = cross_scopes(journal.root, tx['cross'], tx['before'], tx['after'])
+    return (source/'_organize'/'cross-volume'/f"{tx['id']}.original",
+            target/'_organize'/'cross-volume'/f"{tx['id']}.stage"/'payload')
+
+
+def make_transfer_parent(path, volume):
+    assert_no_links(path)
+    path.mkdir(parents=True, exist_ok=True)
+    if cross_volume.different_volume(path, volume):
+        raise SafetyError('跨卷移动的暂存区域位于其他卷')
+    sync_directory(path.parent)
+
+
+def make_transfer_area(path, volume):
+    assert_no_links(path)
+    make_transfer_parent(path.parent.parent, volume)
+    path.parent.mkdir(mode=0o777 if os.name == 'nt' else 0o700)
+    sync_directory(path.parent.parent)
+    return identity(path.parent)
+
+
+def check_transfer_area(path, expected):
+    assert_no_links(path)
+    if not same_identity(path.parent, expected):
+        raise SafetyError('跨卷移动的暂存区域已变化，保留现场')
+
+
+def clean_transfer_area(path, expected):
+    if not os.path.lexists(path.parent):
+        return
+    check_transfer_area(path, expected)
+    path.parent.rmdir()
+    sync_directory(path.parent.parent)
+
+
+def stage_cross_move(journal, tx, expected_parent=None):
+    before, after, authority = tx['before'], tx['after'], tx['cross']
+    _, stage = transfer_paths(journal, tx)
+    check = cross_guard(journal, authority, before, after)
+    tx['stage_area_id'] = make_transfer_area(stage, Path(after).parent)
+    journal.save_manifest(tx)
+    check_transfer_area(stage, tx['stage_area_id'])
+    cross_volume.copy_inventory(before, stage, tx['cross_tree'], sync_directory, check)
+    check = cross_guard(journal, authority, before, after)
+    verify_original(before, tx, check)
+    stage_tree = cross_volume.inventory(stage, tx['stage_area_id']['dev'], check)
+    if cross_volume.fingerprint(stage_tree) != tx['cross_fingerprint']:
+        raise SafetyError('跨卷目标副本校验失败，保留原件')
+    tx['published_id'] = identity(stage)
+    journal.save_manifest(tx)
+    check_transfer_area(stage, tx['stage_area_id'])
+    if expected_parent is not None:
+        check_reviewed_parent(Path(after).parent, expected_parent)
+    cross_volume.publish(stage, after, rename_noreplace)
+
+
+def verify_original(path, tx, check):
+    tree = cross_volume.inventory(path, tx['identity']['dev'], check)
+    if tree != tx['cross_tree']:
+        raise SafetyError('跨卷移动原件已变化，保留现场')
+
+
+def verify_published(path, tx, check):
+    if not same_identity(path, tx.get('published_id'), content=True):
+        raise SafetyError('跨卷移动的已发布副本无法识别，保留现场')
+    tree = cross_volume.inventory(path, tx['published_id']['dev'], check)
+    if cross_volume.fingerprint(tree) != tx['cross_fingerprint']:
+        raise SafetyError('跨卷移动的已发布副本已变化，保留现场')
+    return tree
+
+
+def finish_cross_move(journal, tx):
+    before, after, authority = tx['before'], tx['after'], tx['cross']
+    original, stage = transfer_paths(journal, tx)
+    check = cross_guard(journal, authority, before, after)
+    published = verify_published(after, tx, check)
+    if os.path.lexists(before):
+        if tx.get('state') in ('purging', 'done') or os.path.lexists(original):
+            raise SafetyError('跨卷原路径已被重新占用，保留现场')
+        verify_original(before, tx, check)
+        make_transfer_parent(original.parent, Path(before).parent)
+        if tx.get('state') != 'retiring':
+            tx['state'] = 'retiring'
+            journal.save_manifest(tx)
+        assert_no_links(original)
+        cross_volume.publish(before, original, rename_noreplace)
+    if os.path.lexists(original):
+        if tx.get('state') not in ('retiring', 'purging') or not same_identity(original, tx['identity']):
+            raise SafetyError('跨卷移动的隔离原件无法识别，保留现场')
+        if tx.get('state') != 'purging':
+            verify_original(original, tx, check)
+            tx['state'] = 'purging'
+            journal.save_manifest(tx)
+        check = cross_guard(journal, authority, before, after)
+        remaining = cross_volume.inventory(original, tx['identity']['dev'], check)
+        cross_volume.remove_inventory(original, tx['cross_tree'], remaining, Path(after), published)
+        sync_directory(original.parent)
+    elif tx.get('state') not in ('purging', 'done'):
+        raise SafetyError('跨卷原件位置无法确定，保留现场')
+    verify_published(after, tx, check)
+    clean_transfer_area(stage, tx.get('stage_area_id'))
+
+
+def recover_cross_move(journal, tx):
+    before, after = tx['before'], tx['after']
+    if not same_identity(after, tx.get('published_id')):
+        if tx.get('state') in ('retiring', 'purging', 'done') or not os.path.lexists(before):
+            raise SafetyError('跨卷移动的已发布副本无法识别，保留现场')
+        # The copy may be partial. Preserve it and leave the original in place.
+        check = cross_guard(journal, tx['cross'], before, after)
+        verify_original(before, tx, check)
+        return False
+    finish_cross_move(journal, tx)
+    return True
+
+
+def transaction(journal, run, op, effect, before, after, reason, inverse_of=None,
+                cross=None, expected_fingerprint=None, expected_source=None, expected_parent=None):
+    if effect == 'cross-move':
+        with cross_lock(journal, cross, before, after):
+            return execute_transaction(journal, run, op, effect, before, after, reason,
+                                       inverse_of, cross, expected_fingerprint, expected_source, expected_parent)
+    return execute_transaction(journal, run, op, effect, before, after, reason,
+                               inverse_of, cross, expected_fingerprint, expected_source, expected_parent)
+
+
+def execute_transaction(journal, run, op, effect, before, after, reason, inverse_of,
+                        cross, expected_fingerprint, expected_source, expected_parent):
+    protection = journal.protection()
     if effect == 'move':
-        guard(before,journal.root,markers,descendants=True)
-        guard(after,journal.root,markers)
+        guard(before,journal.root,protection,descendants=True)
+        guard(after,journal.root,protection)
         if not os.path.lexists(before) or os.path.lexists(after):
             raise SafetyError('源不存在或目标已存在')
         if within(after,before):
@@ -497,14 +810,28 @@ def transaction(journal, run, op, effect, before, after, reason, inverse_of=None
         if source_id['dev'] != os.stat(Path(after).parent).st_dev:
             raise SafetyError('拒绝跨卷移动；当前只支持同卷原子改名')
         edits = reference_edits(journal.root,before,after)
+    elif effect == 'cross-move':
+        check = cross_guard(journal, cross, before, after)
+        if not os.path.lexists(before) or os.path.lexists(after):
+            raise SafetyError('源不存在或目标已存在')
+        source_id = identity(before)
+        tree = cross_volume.inventory(before, source_id['dev'], check)
+        fingerprint = cross_volume.fingerprint(tree)
+        if expected_fingerprint is not None and fingerprint != expected_fingerprint:
+            raise SafetyError('跨卷操作对象内容或权限已改变，保留文件')
+        edits = reference_edits(journal.root,before,after)
     else:
-        guard(after if effect == 'mkdir' else before,journal.root,markers,descendants=effect=='rmdir')
+        guard(after if effect == 'mkdir' else before,journal.root,protection,descendants=effect=='rmdir')
         source_id = identity(before) if effect == 'rmdir' else None
         edits = []
         if effect == 'mkdir' and os.path.lexists(after):
             raise SafetyError('建目录目标已存在')
         if effect == 'rmdir' and (not os.path.isdir(before) or os.listdir(before)):
             raise SafetyError('撤销建目录时目录非空，保留')
+    if expected_source is not None and reviewed_identity(before) != expected_source:
+        raise SafetyError('源在预演后发生变化，请重新预演')
+    if expected_parent is not None:
+        check_reviewed_parent(Path(after).parent, expected_parent)
     tx = {'id':uuid.uuid4().hex,'run_id':run,'op':op,'effect':effect,
           'before':str(before),'after':str(after),'reason':reason,
           'inverse_of':inverse_of,'identity':source_id,'edits':edits}
@@ -517,16 +844,28 @@ def transaction(journal, run, op, effect, before, after, reason, inverse_of=None
         tx['lineage']=None
     if effect=='mkdir':
         tx['staging']=str(journal.root/'_organize/staging'/tx['id'])
+    elif effect == 'cross-move':
+        tx.update(cross=cross, cross_tree=tree, cross_fingerprint=fingerprint)
     journal.save_manifest(tx)
     journal.append(run,op,before,after,json.dumps(tx_meta(tx),ensure_ascii=False),'pending')
     # Recheck immediately after recording intent. A failed check leaves an explicit
     # unresolved prepare for recovery, never an unrecorded filesystem operation.
     if effect == 'move':
-        guard(before,journal.root,load_markers(journal.root),descendants=True)
-        guard(after,journal.root,load_markers(journal.root))
+        protection = journal.protection()
+        guard(before,journal.root,protection,descendants=True)
+        guard(after,journal.root,protection)
         if not same_identity(before,source_id,content=True) or os.path.lexists(after):
             raise SafetyError('操作对象或目标在预检后发生变化')
+        if expected_source is not None and reviewed_identity(before) != expected_source:
+            raise SafetyError('源在预演后发生变化，请重新预演')
+        if expected_parent is not None:
+            check_reviewed_parent(Path(after).parent, expected_parent)
         rename_noreplace(before, after)
+    elif effect == 'cross-move':
+        if expected_source is not None and reviewed_identity(before) != expected_source:
+            raise SafetyError('源在预演后发生变化，请重新预演')
+        stage_cross_move(journal, tx, expected_parent)
+        finish_cross_move(journal, tx)
     elif effect == 'mkdir':
         staging=Path(tx['staging'])
         assert_no_links(staging)
@@ -534,9 +873,11 @@ def transaction(journal, run, op, effect, before, after, reason, inverse_of=None
         os.mkdir(staging)
         tx['identity'] = identity(staging)
         journal.save_manifest(tx)
-        guard(after,journal.root,load_markers(journal.root))
+        guard(after,journal.root,journal.protection())
         if tx['identity']['dev'] != os.stat(Path(after).parent).st_dev:
             raise SafetyError('目标目录不在同一卷')
+        if expected_parent is not None:
+            check_reviewed_parent(Path(after).parent, expected_parent)
         rename_noreplace(staging,after)
     else:
         os.rmdir(before)
@@ -549,7 +890,11 @@ def transaction(journal, run, op, effect, before, after, reason, inverse_of=None
 
 
 def tx_meta(tx):
-    return {k:tx[k] for k in ('reason','effect','identity','inverse_of','lineage')} | {'tx':tx['id']}
+    metadata = {k:tx[k] for k in ('reason','effect','identity','inverse_of','lineage')} | {'tx':tx['id']}
+    if tx['effect'] == 'cross-move':
+        metadata.update(cross=tx['cross'], cross_fingerprint=tx['cross_fingerprint'],
+                        identity=tx.get('published_id'))
+    return metadata
 
 
 def current_identity(row, rows, active, path):
@@ -558,19 +903,37 @@ def current_identity(row, rows, active, path):
     for candidate in reversed(completed(rows)):
         data=meta(candidate)
         if (candidate['seq'] in active and (data.get('lineage') or candidate['seq'])==lineage
-                and data.get('effect') in ('move','mkdir') and key(candidate['after'])==key(path)):
+                and data.get('effect') in ('move','mkdir','cross-move') and key(candidate['after'])==key(path)):
             return data.get('identity')
     return meta(row).get('identity')
 
 
-def ensure_parents(journal,run,path,reason):
+def existing_parent(path):
     missing = []
     current = Path(path)
-    while not current.exists():
+    while not os.path.lexists(current):
         missing.append(current)
         current = current.parent
+    return current, missing
+
+
+def ensure_parents(journal, run, path, reason, reviewed=None, created=None):
+    current, missing = existing_parent(path)
+    expected = None
+    if reviewed is not None:
+        expected = created.get(key(current))
+        if expected is None and key(current) == key(reviewed['parent']):
+            expected = reviewed['parent_id']
+        if expected is None:
+            raise SafetyError('目标父目录在预演后出现或消失，请重新预演')
+        check_reviewed_parent(current, expected)
     for folder in reversed(missing):
-        transaction(journal,run,'mkdir','mkdir','-',str(folder),reason)
+        tx = transaction(journal, run, 'mkdir', 'mkdir', '-', str(folder), reason,
+                         expected_parent=expected)
+        if reviewed is not None:
+            expected = tx['identity']
+            created[key(folder)] = expected
+    return expected
 
 
 def collision(path, reserved):
@@ -583,32 +946,38 @@ def collision(path, reserved):
     return str(result)
 
 
-DEFAULT_POLICY = {
-    'auto_approve': {
-        'rename': True,
-        'merge_to_known_zone': True,
-        'zones': [],
-        'max_gb': 400,
-    },
-    'never_touch': ['SECRET', 'FOREIGN', 'WORKSPACE', 'NO_TOUCH', 'ASK'],
-}
+def approval_settings(policy):
+    approval = policy.get('auto_approve', {})
+    if not isinstance(approval, dict):
+        raise SafetyError('policy 的 auto_approve 必须是对象')
+    rename = approval.get('rename', True)
+    merge = approval.get('merge_to_known_zone', True)
+    zones = approval.get('zones', policy.get('zones', []))
+    max_gb = approval.get('max_gb', 400)
+    if not isinstance(rename, bool) or not isinstance(merge, bool):
+        raise SafetyError('policy 的自动批准开关必须是布尔值')
+    if not isinstance(zones, list) or any(not isinstance(name, str) for name in zones):
+        raise SafetyError('policy 的 zones 必须是目录名数组')
+    if (type(max_gb) not in (int, float) or max_gb < 0 or
+            (isinstance(max_gb, float) and not math.isfinite(max_gb))):
+        raise SafetyError('policy 的 max_gb 必须是非负有限数字')
+    return rename, merge, {name.casefold() for name in zones}, max_gb * 10**9
 
 
-def load_policy(path):
-    """读 policy。缺失时用保守默认（只自动改名，跨目录需人批）。"""
-    if not path:
-        return dict(DEFAULT_POLICY)
-    assert_no_links(path)
-    try:
-        import json
-        raw = json.loads(Path(path).read_text(encoding='utf-8-sig'))
-    except (OSError, ValueError) as exc:
-        raise SafetyError('policy 文件无法解析') from exc
-    policy = dict(DEFAULT_POLICY)
-    for key, value in (raw or {}).items():
-        if not key.startswith('_'):
-            policy[key] = value
-    return policy
+def fits_size_limit(path, limit):
+    if not os.path.isdir(path):
+        return os.stat(path, follow_symlinks=False).st_size <= limit
+
+    def fail(exc):
+        raise exc
+
+    total = 0
+    for directory, _, files in os.walk(path, onerror=fail):
+        for name in files:
+            total += os.stat(Path(directory)/name, follow_symlinks=False).st_size
+            if total > limit:
+                return False
+    return True
 
 
 def plan(args):
@@ -621,25 +990,56 @@ def plan(args):
 
     删除永不自动生成（policy 里没有这个开关）。
     """
-    probe = Path(args.probe) if args.probe else Path(args.root)/'_organize'/'probe'
+    journal = Journal(args.root)
+    root = journal.root
+    assert_no_links(root)
+    probe = Path(args.probe) if args.probe else root/'_organize'/'probe'
+    assert_no_links(probe)
     if not probe.is_dir():
         raise SafetyError('探针结果目录不存在')
-    policy = load_policy(args.policy)
-    zone_names = {str(name).casefold() for name in
-                  (policy.get('auto_approve',{}) or {}).get('zones',[]) or []}
-    markers = load_markers(args.root)
+    policy = rules.load_root_policy(root)
+    protection = journal.protection(policy)
+    if args.policy:
+        assert_no_links(args.policy)
+        try:
+            policy = json.loads(Path(args.policy).read_text(encoding='utf-8-sig'))
+        except (OSError, ValueError) as exc:
+            raise SafetyError('policy 文件无法解析') from exc
+        if not isinstance(policy, dict):
+            raise SafetyError('policy 必须是对象')
+        protection.markers.extend(no_go_markers(root, policy))
+    allow_rename, allow_merge, zone_names, max_bytes = approval_settings(policy)
+    has_secrets = any(marker['kind'] == 'SECRET' for marker in protection.markers)
 
-    actions, skipped, blocked = [], [], []
+    actions, skipped, blocked = [], [], 0
     for name in sorted(os.listdir(probe)):
         if not name.endswith('.json') or name.startswith(('units_','group_','dup_')):
             continue
-        data = json.loads((probe/name).read_text(encoding='utf-8-sig'))
+        path_to_probe = probe/name
+        assert_no_links(path_to_probe)
+        data = json.loads(path_to_probe.read_text(encoding='utf-8-sig'))
+        if not isinstance(data, dict):
+            raise SafetyError('探针结果必须是对象')
         path = data.get('path')
-        if not path or not os.path.lexists(path):
+        if not isinstance(path, str) or not path:
             continue
         op = data.get('action')
-        reason = str(data.get('unit_why') or '-').replace('\t',' ')[:200]
+        if op in ('keep', 'ask'):
+            continue
+        try:
+            path = guard(path,root,protection,descendants=True)
+        except (OSError, ValueError):
+            blocked += 1
+            continue
+        if not os.path.lexists(path):
+            continue
+        # Probe notes are free text and may mention unrelated protected paths.
+        reason = '探针建议（有凭据标记，省略原始说明）' if has_secrets else (
+            str(data.get('unit_why') or '-').replace('\t',' ')[:200])
         if op == 'rename' and data.get('rename_to'):
+            if not allow_rename:
+                skipped.append((path, '策略未批准自动改名'))
+                continue
             name = str(data['rename_to']).strip()
             # rename_to 必须是单个合法文件名：不含分隔符、不是说明文字
             if (not name or len(name) > 200 or
@@ -648,42 +1048,56 @@ def plan(args):
                 skipped.append((path, 'rename_to 不是合法文件名（可能是说明文字）'))
             else:
                 target = Path(path).with_name(name)
+                try:
+                    guard(target,root,protection)
+                except (OSError, ValueError):
+                    blocked += 1
+                    continue
                 if os.path.lexists(target):
                     skipped.append((path, '改名已生效'))
+                elif not fits_size_limit(path, max_bytes):
+                    skipped.append((path, '超过策略的体积上限'))
                 else:
                     actions.append(dict(op='rename',src=path,dst=name,reason=reason))
         elif op == 'merge' and data.get('merge_target'):
-            target = Path(str(data['merge_target']))
-            zone = target.name.casefold()
-            if zone_names and zone in zone_names:
-                actions.append(dict(op='move',src=path,dst=str(target),reason=reason))
-            else:
+            if not allow_merge:
+                skipped.append((path, '策略未批准自动合并'))
+                continue
+            try:
+                target = Path(guard(str(data['merge_target']),root,protection))
+                guard(target/Path(path).name,root,protection)
+            except (OSError, ValueError):
+                blocked += 1
+                continue
+            if key(target.parent) != key(root) or target.name.casefold() not in zone_names:
                 skipped.append((path,'merge 目标不在信任区'))
+            elif not fits_size_limit(path, max_bytes):
+                skipped.append((path, '超过策略的体积上限'))
+            else:
+                actions.append(dict(op='move',src=path,dst=str(target),reason=reason))
         elif op in ('split','enter'):
             skipped.append((path,f'{op} 需要先归组，不自动生成'))
-        elif op in ('keep','ask'):
-            continue
         else:
             skipped.append((path,f'未处理的 action={op}'))
 
-    out = Path(args.out) if args.out else Path(args.root)/'_organize'/'plan.tsv'
-    if actions and not args.dry_run:
-        rows = [dict(op=a['op'],src=a['src'],dst=a['dst'],reason=a['reason']) for a in actions]
-        data = encode_tsv(rows,('op','src','dst','reason'))
-        assert_no_links(out.parent) if out.parent.exists() else out.parent.mkdir(parents=True,exist_ok=True)
-        atomic_write(out,data)
+    out = Path(args.out) if args.out else root/'_organize'/'plan.tsv'
+    wrote = not args.dry_run and (bool(actions) or os.path.lexists(out))
+    if wrote:
+        atomic_write(out,encode_tsv(actions,('op','src','dst','reason')))
 
     if not args.quiet:
         print(f'可自动执行 {len(actions)} 项')
         for action in actions:
             print(f"  {action['op']:<7} {Path(action['src']).name[:50]}")
+        if blocked:
+            print(f'已拦截 {blocked} 项（不列路径）')
         if skipped:
             print(f'\n需人定 {len(skipped)} 项')
             for path,why in skipped[:40]:
                 print(f'  {Path(path).name[:36]:<38} {why}')
             if len(skipped)>40:
                 print(f'  ... 另有 {len(skipped)-40} 项')
-        if actions and not args.dry_run:
+        if wrote:
             print(f'\n已写 {out}')
     return 0
 
@@ -698,71 +1112,201 @@ def read_actions(args):
         raise SafetyError('决策表不存在')
     rows = read_tsv(args.plan,('path','hypothesis','evidence','verdict','confidence','target','note'))
     actions = []
-    markers = load_markers(args.root)
+    protection = Journal(args.root).protection()
+    has_secrets = any(marker['kind'] == 'SECRET' for marker in protection.markers)
     for row in rows:
         if row['confidence'] not in ('high','medium'):
             continue
-        reason = row['hypothesis']+' | '+row['evidence']
+        reason = ('探针建议（有凭据标记，省略原始说明）' if has_secrets
+                  else row['hypothesis']+' | '+row['evidence'])
         if row['verdict'] == 'split':
             raise SafetyError('split 必须先按单元归组并提供 actions.tsv；不再按扩展名自动拆分')
         if row['verdict'] == 'rename':
             actions.append(dict(op='rename',src=row['path'],dst=row['target'],reason=reason))
         elif row['verdict'] == 'merge':
-            guard(row['path'],args.root,markers,descendants=True)
+            guard(row['path'],args.root,protection,descendants=True)
             source = Path(row['path'])
             children = sorted(source.iterdir()) if source.is_dir() else [source]
             actions.extend(dict(op='move',src=str(p),dst=row['target'],reason=reason) for p in children)
     return actions
 
 
-def preflight(root, actions):
-    markers, prepared, blocked, reserved = load_markers(root), [], [], set()
+def preflight(root, actions, journal=None, external_roots=(), review=False):
+    journal = journal or Journal(root)
+    protection = journal.protection()
+    prepared, blocked, reserved = [], [], set()
+    sources, source_parents, moved_targets, destination_parents = set(), set(), set(), set()
+    checked_external = set()
     for index, action in enumerate(actions,1):
         try:
             op, src, dst = action['op'],action['src'],action['dst']
+            cross = None
             if op == 'keep':
                 continue
             if op not in ('move','rename','mkdir'):
                 raise SafetyError('未知动作类型')
             if op == 'mkdir':
-                target = guard(dst,root,markers)
+                target = guard(dst,root,protection)
                 if os.path.isdir(target):
                     continue
                 if os.path.lexists(target):
                     raise SafetyError('建目录目标是文件')
+                if key(target) in moved_targets:
+                    raise SafetyError('建目录目标已被前序动作占用')
+                if key(target) in reserved or key(target) in destination_parents:
+                    continue
                 src = '-'
             else:
-                src = guard(src,root,markers,descendants=True)
+                src = guard(src,root,protection,descendants=True)
                 if not os.path.lexists(src):
                     raise SafetyError('源不存在')
+                source_key = key(src)
+                parents = {os.path.normcase(str(p)) for p in Path(source_key).parents}
+                if (source_key in sources or source_key in source_parents or
+                        source_key in destination_parents or parents & sources):
+                    raise SafetyError('源路径与前序动作重叠')
                 if op == 'rename':
-                    if not dst or dst in ('.','..') or re.search(r'[\\/:\x00-\x1f]',dst) or dst.rstrip(' .') != dst:
+                    if not dst or dst in ('.','..') or re.search(r'[\\/:*?"<>|\x00-\x1f]',dst) or dst.rstrip(' .') != dst:
                         raise SafetyError('rename 的目标必须是有效文件名')
                     if os.name == 'nt' and re.match(r'(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)',dst):
                         raise SafetyError('rename 使用了系统保留名称')
-                    target = guard(str(Path(src).with_name(dst)),root,markers)
+                    target = guard(str(Path(src).with_name(dst)),root,protection)
                     if key(src) == key(target):
                         continue
                     if os.path.lexists(target) or key(target) in reserved:
                         raise SafetyError('目标名称已存在')
                 else:
-                    destination = guard(dst,root,markers)
-                    if os.path.lexists(destination) and not os.path.isdir(destination):
-                        raise SafetyError('move 的目标必须是目录')
-                    if key(Path(src).parent) == key(destination):
-                        continue
-                    target = collision(Path(destination)/Path(src).name,reserved)
-                    guard(target,root,markers)
+                    if os.path.isabs(dst):
+                        cross = next((item for item in external_roots if within(dst, item['root'])), None)
+                    if cross:
+                        target = str(Path(normal(dst))/Path(src).name)
+                        check = cross_guard(journal, cross, src, target)
+                        if review and cross['root'] not in checked_external:
+                            if Journal(cross['root']).unresolved():
+                                raise SafetyError('跨卷目标根存在未完成操作；请先恢复该根')
+                            checked_external.add(cross['root'])
+                        if os.path.lexists(target) or key(target) in reserved:
+                            raise SafetyError('跨卷移动目标已被占用')
+                        cross_volume.inventory(src, identity(src)['dev'], check, content=False)
+                    else:
+                        destination = guard(dst,root,protection)
+                        if os.path.lexists(destination) and not os.path.isdir(destination):
+                            raise SafetyError('move 的目标必须是目录')
+                        if key(Path(src).parent) == key(destination):
+                            continue
+                        target = collision(Path(destination)/Path(src).name,reserved)
+                        guard(target,root,protection)
                 if within(target,src):
                     raise SafetyError('不能把目录移动到自身内部')
+            target_key = key(target)
+            target_parents = {os.path.normcase(str(p)) for p in Path(target_key).parents}
+            if target_key in sources or target_parents & sources or target_parents & moved_targets:
+                raise SafetyError('目标路径依赖于前序移动的目录')
+            if target_key in destination_parents:
+                raise SafetyError('目标路径将由前序动作创建为父目录')
+            parent, missing_parents = existing_parent(Path(target).parent)
+            if not parent.is_dir():
+                raise SafetyError('目标路径的父级不是目录')
+            action_plan = dict(op=op, src=src, dst=target, reason=action.get('reason','-'))
+            if review:
+                for missing in missing_parents:
+                    guard(missing, root, protection)
+                action_plan['review'] = {
+                    'row': index, 'parent': str(parent), 'parent_id': directory_identity(parent),
+                    'source': reviewed_source(src) if src != '-' else None,
+                }
+            if src != '-':
+                if cross_volume.different_volume(src, parent) != bool(cross):
+                    raise SafetyError('跨卷移动必须显式授权其他卷上的目标根')
                 reference_edits(root,src,target)  # validate JSON before any operation
-            reserved.add(key(target))
-            prepared.append(dict(op=op,src=src,dst=target,reason=action.get('reason','-')))
+                sources.add(source_key)
+                source_parents.update(parents)
+                moved_targets.add(target_key)
+            reserved.add(target_key)
+            destination_parents.update(target_parents)
+            prepared.append(action_plan)
+            if cross:
+                prepared[-1]['cross'] = cross
         except (OSError,ValueError) as exc:
             # Intentionally omit all action paths, including SECRET descendants.
             message = str(exc) if isinstance(exc,SafetyError) else '读取失败，已停止此动作'
             blocked.append(f'动作 {index}: {message}')
     return prepared, blocked
+
+
+def receipt_path(value):
+    path = Path(normal(value))
+    if path.suffix.casefold() != '.json' or any(p.casefold() == '_organize' for p in path.parts):
+        raise SafetyError('预演清单须为 _organize 以外的 JSON 文件')
+    assert_no_links(path)
+    return path
+
+
+def receipt_state(root, actions, prepared, external_roots):
+    return {
+        'version': 1,
+        'root': root,
+        'root_id': directory_identity(root),
+        'actions_sha256': digest(json.dumps(actions, sort_keys=True).encode('utf-8')),
+        'destination_roots': sorted(
+            ({'path': item['root'], 'id': directory_identity(item['root'])} for item in external_roots),
+            key=lambda item: item['path'],
+        ),
+        'steps': [
+            dict(action['review'], op=action['op'], src=action['src'], dst=action['dst'])
+            for action in prepared
+        ],
+    }
+
+
+def write_receipt(path, state, journal):
+    if os.path.lexists(path) or not path.parent.is_dir():
+        raise SafetyError('预演清单须为现有目录下的新文件，避免覆盖')
+    if within(path, journal.root):
+        guard(path, journal.root, journal.protection())
+    if any(within(path, step['dst']) or (step['src'] != '-' and within(path, step['src']))
+           for step in state['steps']):
+        raise SafetyError('预演清单不能放入将移动的源或目标目录')
+    for external in state['destination_roots']:
+        if within(path, external['path']):
+            guard(path, external['path'], Journal(external['path']).protection())
+    fd, temporary = tempfile.mkstemp(prefix='.packtidy-preview-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as file:
+            json.dump(state, file, ensure_ascii=False, indent=2)
+            file.write('\n')
+            file.flush()
+            os.fsync(file.fileno())
+        assert_no_links(path)
+        rename_noreplace(temporary, path)
+    finally:
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
+
+
+def verify_receipt(path, actual):
+    if not path.is_file():
+        raise SafetyError('预演清单不存在，请先预演')
+    try:
+        reviewed = json.loads(path.read_text(encoding='utf-8'))
+    except ValueError as exc:
+        raise SafetyError('预演清单格式无效，请重新预演') from exc
+    if not isinstance(reviewed, dict) or reviewed.get('version') != 1:
+        raise SafetyError('预演清单格式或版本无效，请重新预演')
+    if any(reviewed.get(field) != actual[field] for field in ('root', 'root_id', 'destination_roots')):
+        raise SafetyError('整理根或授权目标根在预演后发生变化，请重新预演')
+    if reviewed.get('actions_sha256') != actual['actions_sha256']:
+        raise SafetyError('动作表在预演后发生变化，请重新预演')
+    steps = reviewed.get('steps')
+    if not isinstance(steps, list) or any(not isinstance(step, dict) for step in steps):
+        raise SafetyError('预演清单格式无效，请重新预演')
+    before = {step.get('row'): step for step in steps if type(step.get('row')) is int}
+    after = {step['row']: step for step in actual['steps']}
+    if steps != actual['steps']:
+        changed = sorted(row for row in before.keys() | after.keys() if before.get(row) != after.get(row))
+        for row in changed:
+            print(f'动作 {row}: 源、最终落点或父目录在预演后发生变化')
+        raise SafetyError('实际动作与预演清单不符，请重新预演')
 
 
 def apply(args):
@@ -771,25 +1315,45 @@ def apply(args):
         raise SafetyError('整理根目录不存在')
     assert_no_links(root)
     actions = read_actions(args)
+    receipt = receipt_path(args.receipt) if getattr(args, 'receipt', None) else None
     if not 1 <= args.batch_size <= 200:
         raise SafetyError('批次大小必须为 1–200')
-    if args.allow_cross_drive:
-        raise SafetyError('当前版本只支持同卷移动，不能启用跨盘')
+    external_roots = []
+    requested = getattr(args, 'destination_root', ()) or ()
+    if bool(requested) != args.allow_cross_drive:
+        raise SafetyError('--allow-cross-drive 和 --destination-root 必须同时使用')
+    for path in requested:
+        external = check_external_root(root, path)
+        if any(within(external, item['root']) or within(item['root'], external) for item in external_roots):
+            raise SafetyError('授权的跨卷目标根不能重复或重叠')
+        external_roots.append(cross_authority(root, external))
     journal = Journal(root)
     run = run_id()
 
     def execute():
         if journal.unresolved():
             raise SafetyError('存在未完成操作；请先运行 recover')
-        prepared, blocked = preflight(root,actions)
+        prepared, blocked = preflight(root, actions, journal, external_roots, review=receipt is not None)
         for message in blocked:
             print('拦截 '+message)
+        if receipt is not None:
+            if blocked:
+                raise SafetyError('整份清单已停止，请处理拦截项后重新预演')
+            state = receipt_state(root, actions, prepared, external_roots)
+            if args.dry_run:
+                write_receipt(receipt, state, journal)
+                print(f'已写预演清单：{receipt}')
+            else:
+                verify_receipt(receipt, state)
+                journal.ensure_ready()
         if args.dry_run:
             for action in prepared:
                 print(f"[dry] {action['op']}: {action['src']} -> {action['dst']}")
-            print(f'预演完成：将执行 {len(prepared)} 项，拦截 {len(blocked)} 项；未修改文件')
+            note = '；只写预演清单' if receipt is not None else '；未修改文件'
+            print(f'预演完成：将执行 {len(prepared)} 项，拦截 {len(blocked)} 项{note}')
             return 1 if blocked else 0
         done = 0
+        created = {}
         for index,action in enumerate(prepared):
             if index and index % args.batch_size == 0:
                 try:
@@ -799,8 +1363,26 @@ def apply(args):
                 if answer.lower() != 'y':
                     break
             op,src,target = action['op'],action['src'],action['dst']
-            ensure_parents(journal,run,Path(target).parent,action['reason'])
-            transaction(journal,run,op,'mkdir' if op=='mkdir' else 'move',src,target,action['reason'])
+            review = action.get('review')
+            source = review['source'] if review is not None else None
+            if review is not None:
+                if os.path.lexists(target):
+                    raise SafetyError('预演中的落点已被占用，请重新预演')
+                if source is not None and reviewed_source(src) != source:
+                    raise SafetyError('源在预演后发生变化，请重新预演')
+            cross = action.get('cross')
+            parent = Path(target).parent
+            parent_id = None
+            if cross:
+                if review is not None:
+                    parent_id = review['parent_id']
+            else:
+                parent_id = ensure_parents(journal, run, parent, action['reason'], review, created)
+            effect = 'cross-move' if cross else 'mkdir' if op == 'mkdir' else 'move'
+            tx = transaction(journal, run, op, effect, src, target, action['reason'], cross=cross,
+                             expected_source=source['identity'] if source else None, expected_parent=parent_id)
+            if review is not None and op == 'mkdir':
+                created[key(target)] = tx['identity']
             done += 1
             print(f'{op}: {src} -> {target}')
         print(f'完成：成功 {done} | 拦截 {len(blocked)} | run_id={run}')
@@ -809,7 +1391,7 @@ def apply(args):
 
     if args.dry_run:
         return execute()
-    with journal.locked():
+    with journal.locked(prepare=receipt is None):
         return execute()
 
 
@@ -818,8 +1400,8 @@ def inverse_action(row):
     effect = m.get('effect')
     if not effect:
         raise SafetyError('旧日志缺少对象身份与事务信息；保留文件，请人工核对')
-    if effect == 'move':
-        return 'move',row['after'],row['before']
+    if effect in ('move', 'cross-move'):
+        return effect,row['after'],row['before']
     if effect == 'mkdir':
         return 'rmdir',row['after'],'-'
     if effect == 'rmdir':
@@ -865,16 +1447,28 @@ def undo(args):
                 continue
             try:
                 effect,src,dst = inverse_action(row)
-                markers = load_markers(root)
+                protection = journal.protection()
+                cross, fingerprint = None, None
+                if effect == 'cross-move':
+                    data = meta(row)
+                    cross, fingerprint = data.get('cross', {}), data.get('cross_fingerprint', '')
+                    if not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{64}', fingerprint):
+                        raise SafetyError('跨卷历史记录缺少有效的内容校验值')
+                    check = cross_guard(journal, cross, src, dst)
                 if src != '-':
-                    guard(src,root,markers,descendants=True)
+                    if not cross:
+                        guard(src,root,protection,descendants=True)
                     if not os.path.lexists(src):
                         counts['skip'] += 1
                         continue
                     if not same_identity(src,current_identity(row,rows,active,src),content=True):
                         raise SafetyError('操作对象已被替换或修改，保留文件')
-                if dst != '-':
-                    guard(dst,root,markers)
+                    if cross and args.dry_run:
+                        tree = cross_volume.inventory(src, identity(src)['dev'], check)
+                        if cross_volume.fingerprint(tree) != fingerprint:
+                            raise SafetyError('跨卷操作对象内容或权限已改变，保留文件')
+                if dst != '-' and not cross:
+                    guard(dst,root,protection)
                 if effect == 'rmdir' and os.listdir(src):
                     counts['skip'] += 1
                     continue
@@ -882,17 +1476,18 @@ def undo(args):
                     if row['op'] == 'rename':
                         p = Path(dst)
                         dst = collision(p.with_name(p.stem+'_undone'+p.suffix),set())
-                        guard(dst,root,markers)
+                        guard(dst,root,protection)
                     else:
                         counts['conflict'] += 1
                         continue
                 if args.dry_run:
                     print(f'[dry] undo seq {row["seq"]}: {src} -> {dst}')
                 else:
-                    if dst != '-':
+                    if dst != '-' and not cross:
                         ensure_parents(journal,run,Path(dst).parent,'撤销时恢复父目录')
                     transaction(journal,run,'undo-'+row['op'],effect,src,dst,
-                                f'撤销 seq {row["seq"]}',inverse_of=row['seq'])
+                                f'撤销 seq {row["seq"]}',inverse_of=row['seq'],cross=cross,
+                                expected_fingerprint=fingerprint)
                 counts['ok'] += 1
             except (OSError,ValueError) as exc:
                 counts['fail'] += 1
@@ -916,10 +1511,15 @@ def recover(args):
     with journal.locked(repair=True):
         for tx in journal.unresolved():
             effect,src,dst = tx['effect'],tx['before'],tx['after']
-            markers = load_markers(journal.root)
-            for path in (src,dst):
-                if path != '-':
-                    guard(path,journal.root,markers,descendants=path==src)
+            if effect == 'cross-move':
+                with cross_lock(journal, tx['cross'], src, dst):
+                    applied = recover_cross_move(journal, tx)
+                untouched = not applied
+            else:
+                protection = journal.protection()
+                for path in (src,dst):
+                    if path != '-':
+                        guard(path,journal.root,protection,descendants=path==src)
             if effect == 'move':
                 applied = same_identity(dst,tx['identity']) and not os.path.lexists(src)
                 untouched = same_identity(src,tx['identity'])
@@ -930,7 +1530,7 @@ def recover(args):
                 # is durable. Preserve orphan staging directories on abort.
                 untouched = (bool(staging) and not applied and
                              (not tx.get('identity') or same_identity(staging,tx['identity'])))
-            else:
+            elif effect == 'rmdir':
                 applied = not os.path.lexists(src)
                 untouched = same_identity(src,tx['identity'])
             if not applied and not untouched:
@@ -977,6 +1577,7 @@ def marker_command(args):
     def execute():
         if journal.pending_marker_update():
             raise SafetyError('保护标记写入尚未完成；先运行 recover')
+        journal.check_marker_files()
         rows = load_markers(root)
         if args.action in ('add','remove','check'):
             if not args.path or not os.path.isabs(args.path):
@@ -1035,8 +1636,10 @@ def main(argv=None):
     source.add_argument('--rename',nargs=2)
     p.add_argument('--reason',default='-')
     p.add_argument('--dry-run',action='store_true')
+    p.add_argument('--receipt')
     p.add_argument('--batch-size',type=int,default=50)
     p.add_argument('--allow-cross-drive',action='store_true')
+    p.add_argument('--destination-root',action='append',default=[])
     p = sub.add_parser('undo')
     p.add_argument('--journal',required=True)
     selection = p.add_mutually_exclusive_group(required=True)
@@ -1048,7 +1651,7 @@ def main(argv=None):
     p = sub.add_parser('plan')
     p.add_argument('--root',required=True)
     p.add_argument('--probe')
-    p.add_argument('--policy')
+    p.add_argument('--policy', help='计划的审批策略，可指定额外的禁区')
     p.add_argument('--out')
     p.add_argument('--dry-run',action='store_true')
     p.add_argument('--quiet',action='store_true')

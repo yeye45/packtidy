@@ -10,6 +10,7 @@ decisions.py —— 生成决策界面的数据，含新建分类的归属规划
 """
 import argparse
 import json
+import hashlib
 import os
 import sys
 from datetime import datetime
@@ -108,6 +109,20 @@ def unit_num(item):
     return 0
 
 
+def group_key(raw_group):
+    """Stable fingerprint of a group name and its units (order independent)."""
+    if isinstance(raw_group, dict):
+        name = str(raw_group.get("name", ""))
+        units = raw_group.get("units") or []
+    else:
+        name, units = str(raw_group or ""), []
+    if not isinstance(units, list):
+        units = [units]
+    canonical = json.dumps([name, sorted(str(x) for x in units)],
+                           ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def build_nodes(root, probes, units, groups):
     nodes = []
     for path in sorted(set(probes) | set(units) | set(groups)):
@@ -116,8 +131,10 @@ def build_nodes(root, probes, units, groups):
         p = probes.get(path) or {}
         u = units.get(path) or {}
         g = groups.get(path) or {}
-        nodes.append({
+        group_occurrences = {}
+        node = {
             "path": path,
+            "id": os.path.normcase(os.path.normpath(path)),
             "name": os.path.basename(path.rstrip(os.sep)),
             "action": p.get("action"),
             "confidence": p.get("confidence"),
@@ -133,18 +150,31 @@ def build_nodes(root, probes, units, groups):
                     x.get("relation", ""), x.get("relation", "")),
                 "confidence": x.get("confidence", ""),
                 "n": unit_num(x),
+                "units": x.get("units") if isinstance(x.get("units"), list) else [],
+                "fingerprint": group_key(x),
             } for x in (g.get("groups") or [])],
             "solo_n": len(g.get("solo_units") or []),
             "uncertain_n": len(g.get("uncertain") or []),
-        })
+        }
+        for group in node["groups"]:
+            fp = group["fingerprint"]
+            occurrence = group_occurrences.get(fp, 0)
+            group_occurrences[fp] = occurrence + 1
+            group["id"] = f"{fp}:{occurrence}"
+        nodes.append(node)
     return nodes
 
 
-def count_files(path, limit=20000):
+def count_files(path, limit=20000, permit=None):
     """粗数文件数，用于判断目录是否有内容。"""
     n = 0
     try:
         for dp, dns, fns in os.walk(path):
+            if permit is not None and not permit(dp):
+                dns[:] = []
+                continue
+            if permit is not None:
+                dns[:] = [d for d in dns if permit(os.path.join(dp, d))]
             n += len(fns)
             if n >= limit:
                 return n
@@ -153,7 +183,8 @@ def count_files(path, limit=20000):
     return n
 
 
-def collect_zones(root, max_depth=3, min_files=1):
+def collect_zones(root, max_depth=3, min_files=1, permit=None,
+                  count_limit=20000):
     """收集候选去向，最多 3 层。
 
     root 可以是单个路径，也可以是多个根（多盘）：
@@ -173,7 +204,8 @@ def collect_zones(root, max_depth=3, min_files=1):
             if not os.path.isdir(r) or r in seen:
                 continue
             seen.add(r)
-            for z in collect_zones(r, max_depth, min_files):
+            for z in collect_zones(r, max_depth, min_files, permit,
+                                   count_limit):
                 z["root"] = r
                 # 多盘时 label 加盘符前缀，避免同名混淆
                 drive = os.path.splitdrive(r)[0] or r.rstrip(os.sep)
@@ -194,6 +226,8 @@ def collect_zones(root, max_depth=3, min_files=1):
         for e in entries:
             if not e.is_dir(follow_symlinks=False):
                 continue
+            if permit is not None and not permit(e.path):
+                continue
             name = e.name
             low = name.casefold()
             if name.startswith(('_', '.', '$')):
@@ -209,7 +243,7 @@ def collect_zones(root, max_depth=3, min_files=1):
                 pass
 
             sub_label = f"{label}/{name}" if label else name
-            files = count_files(e.path)
+            files = count_files(e.path, limit=count_limit, permit=permit)
             if files >= min_files:
                 zones.append({
                     "path": e.path,
@@ -657,6 +691,52 @@ def suggest_group(group_name, node_name, zones, node_path=None,
                 "reason": "所在目录已是分类目录，组在内部无需移动",
                 "needsCheck": False, "evidence": evidence}
 
+    # 具体工具链/运行环境信号高于通用“图像”“安装包”“工具”关键词。
+    group_lower = (group_name or "").casefold()
+    specific_category = None
+    if ("语音合成与转换工具链" in group_lower
+            or ("语音合成" in group_lower and "转换" in group_lower
+                and any(x in group_lower for x in
+                        ("工具", "svc", "vits", "moegoe", "uvr5")))):
+        specific_category = "voice_toolchain"
+        preferred = ("语音合成", "语音转换", "歌声合成", "AI工具语音区", "AI工具/语音", "AI工具")
+        proposed = "语音合成与转换工具链"
+    elif "comfyui" in group_lower and any(
+            marker in group_lower for marker in
+            ("运行环境", "便携包", "解压即用", "整合包")):
+        specific_category = "comfy_runtime"
+        preferred = ("AI工具/图像生成", "AI工具")
+        proposed = "AI 图像生成运行环境"
+    else:
+        preferred = ()
+        proposed = ""
+    if specific_category:
+        priority = {label: index for index, label in enumerate(preferred)}
+        candidates = []
+        for zone in zones:
+            label = zone.get("label", "")
+            rank = priority.get(label, priority.get(label.rsplit("/", 1)[-1]))
+            if rank is not None:
+                candidates.append((rank, zone))
+        if candidates:
+            _, target = min(candidates, key=lambda item: (
+                item[0], item[1].get("depth", 99), -item[1].get("files", 0)))
+            already_there = (node_path is not None and os.path.normcase(os.path.normpath(node_path))
+                             == os.path.normcase(os.path.normpath(target["path"])))
+            return {"mode": "keep" if already_there else "move", "target": target["path"],
+                    "targetLabel": target["label"],
+                    "category": specific_category,
+                    "reason": "已位于符合用途的目录" if already_there else f"明确内容证据命中 {specific_category}",
+                    "needsCheck": False,
+                    "evidence": evidence + [
+                        "具体工具链/运行环境用途优先于通用媒体或安装包关键词"]}
+        return {"mode": "new", "newName": proposed,
+                "newParent": "AI工具", "category": specific_category,
+                "reason": "具体用途已识别，但没有可信的现有目标区",
+                "needsCheck": True,
+                "evidence": evidence + [
+                    "未发现名称精确匹配的语音/AI工具目标区，需 full 复核"]}
+
     # ③ 名字匹配
     for rule in CROSS_RULES:
         if not any(k in group_name for k in rule["keys"]):
@@ -733,28 +813,17 @@ def suggest_group(group_name, node_name, zones, node_path=None,
 
 
 
-def _boot_rules():
-    """启动时加载规则包，覆盖模块级常量。
+def _boot_rules(root):
+    """按当前整理根目录加载规则，只应用 decisions 的规则常量。"""
+    import rules as rules_mod
 
-    规则包可选——没有就沿用代码默认值。加载失败不阻断。
-    """
-    try:
-        import rules as rules_mod
-        import safety as safety_mod
-    except ImportError:
-        return
-    try:
-        data = rules_mod.load()
-        if data.get("_missing"):
-            return
-        changed = rules_mod.apply_to(data, safety_mod=safety_mod,
-                                     decisions_mod=sys.modules[__name__])
-        if changed:
-            print(f"规则包 v{data.get('version')} 已生效: "
-                  f"{len(changed)} 组常量", file=sys.stderr)
-    except Exception as exc:
-        print(f"规则包加载失败，使用内置默认: {type(exc).__name__}",
-              file=sys.stderr)
+    data = rules_mod.load_for_root(root)
+    changed = rules_mod.apply_to(
+        data, decisions_mod=sys.modules[__name__])
+    if changed:
+        print(f"规则包 v{data.get('version')} 已生效: "
+              f"{len(changed)} 组常量", file=sys.stderr)
+    return data
 
 
 def is_category_node(name):
@@ -793,12 +862,7 @@ def verification_tier(group, suggest, shape=None, evidence=None):
     ev = evidence or (suggest.get("evidence") or [])
     ev_text = " ".join(str(e) for e in ev)
 
-    # ① 结构信号命中 → 直接定
-    for sig in DIRECT_SIGNALS:
-        if sig in ev_text:
-            return "direct"
-
-    # ② 涉及边界或合并 → 必须三步
+    # 涉及边界、合并或冲突时，结构信号不能降低验证要求。
     mode = suggest.get("mode")
     if mode in ("split", "merge"):
         return "full"
@@ -808,6 +872,10 @@ def verification_tier(group, suggest, shape=None, evidence=None):
     # 候选类别命名（涉及新建，判断影响面大）
     if mode == "new":
         return "full"
+
+    for sig in DIRECT_SIGNALS:
+        if sig in ev_text:
+            return "direct"
 
     # ③ 其余：名字有歧义或内容不明 → 要验
     if shape and shape.get("kind") in ("mixed", "empty"):
@@ -860,12 +928,14 @@ CATEGORY_KEYS = {
     "software_installer": ["安装包", "破解", "插件", "绿色版", "便携版"],
     "system_image": ["镜像", "ISO", "GHO", "WIM"],
     "install_tool": ["刷机", "装机", "驱动", "PE", "TWRP", "ROM", "救砖"],
-    "ai_model": ["模型", "工作流", "词库", "LoRA", "embedding", "ComfyUI"],
+    "ai_model": ["模型", "工作流", "词库", "LoRA", "embedding"],
+    "comfy_runtime": ["ComfyUI 运行环境", "ComfyUI解压即用"],
     "game": ["游戏", "Minecraft", "存档"],
     "book": ["电子书", "小说", "epub", "教材", "教科书"],
     "comic": ["漫画", "连载", "单行本"],
     "music": ["BGM", "歌曲", "专辑", "混音", "翻唱", "OST"],
     "voice_synth": ["VOCALOID", "声库", "音源", "歌声合成", "UTAU", "CeVIO"],
+    "voice_toolchain": ["语音合成与转换工具链", "语音合成工具", "语音转换", "语音合成软件", "变声器"],
     "document": ["文档", "简历", "合同", "表格", "报告"],
     "code": ["源码", "工程", "脚本"],
     "backup": ["备份", "还原点", "快照"],
@@ -916,7 +986,7 @@ def _question_tier(suggest):
     return verification_tier(None, suggest)
 
 
-def apply_answers(nodes, answers_path):
+def apply_answers(nodes, answers_path, zones=None):
     """把 AI 的判断回填。代码只记录，不做确认。
 
     AI 自己走完三步，代码如实记下：
@@ -967,35 +1037,69 @@ def apply_answers(nodes, answers_path):
     index = {}
     for n in nodes:
         for g in n["groups"]:
-            index[(n["name"], g["name"])] = g
+            suggestion = g.get("suggest") or {}
+            index[(n["name"], g["name"])] = (g, verification_tier(g["name"], suggestion))
+            index[(n.get("id"), g.get("id"))] = (g, verification_tier(g["name"], suggestion))
 
     applied = missed = 0
     incomplete = []
+    tier_rank = {"direct": 0, "verify": 1, "full": 2}
 
     for a in items:
         if not isinstance(a, dict):
             continue
-        key = (a.get("parent"), a.get("group"))
-        g = index.get(key)
-        if not g:
+        key = (a.get("nodeId"), a.get("groupId"))
+        match = index.get(key) if all(isinstance(value, str) for value in key) else None
+        if not match and not (a.get("nodeId") or a.get("groupId")):
+            key = (a.get("parent"), a.get("group"))
+            match = index.get(key) if all(isinstance(value, str) for value in key) else None
+        if not match:
             missed += 1
             continue
 
+        g, required_tier = match
         sg = g.setdefault("suggest", {})
         cat = a.get("category")
         label = a.get("label") or cat
-        if cat:
+        target_value = a.get("target")
+        matched_zone = None
+        invalid_target = False
+        if target_value is not None:
+            if isinstance(target_value, str):
+                by_path = [z for z in (zones or [])
+                           if z.get("path") == target_value]
+                by_label = [z for z in (zones or [])
+                            if z.get("label") == target_value]
+                exact = by_path if by_path else by_label
+                if len(exact) == 1:
+                    matched_zone = exact[0]
+                else:
+                    invalid_target = True
+            else:
+                invalid_target = True
+        elif isinstance(label, str):
+            by_label = [z for z in (zones or []) if z.get("label") == label]
+            if len(by_label) == 1:
+                matched_zone = by_label[0]
+        if matched_zone:
+            sg["mode"] = "move"
+            sg["target"] = matched_zone["path"]
+            sg["targetLabel"] = matched_zone.get("label")
+            sg.pop("newName", None)
+            sg.pop("newParent", None)
+        elif cat and not invalid_target:
             sg["mode"] = "new"
             sg["newName"] = label
             sg["newParent"] = None
 
-        ver = a.get("verification") or {}
-        conf = a.get("confirmation") or {}
+        ver = a.get("verification") if isinstance(a.get("verification"), dict) else {}
+        conf = a.get("confirmation") if isinstance(a.get("confirmation"), dict) else {}
 
         # 原样记录 AI 交来的全部内容
         sg["aiJudgement"] = {
             "category": cat,
             "label": label,
+            "target": matched_zone.get("path") if matched_zone else None,
             "hypothesis": a.get("hypothesis") or "",
             "verification": {
                 "method": ver.get("method") or "",
@@ -1003,7 +1107,7 @@ def apply_answers(nodes, answers_path):
                 "disproved": ver.get("disproved") or [],
             },
             "confirmation": {
-                "holds": conf.get("holds"),
+                "holds": conf.get("holds") if isinstance(conf.get("holds"), bool) else None,
                 "confidence": conf.get("confidence") or "",
                 "why": conf.get("why") or "",
                 "residualRisk": conf.get("residualRisk") or "",
@@ -1011,13 +1115,18 @@ def apply_answers(nodes, answers_path):
         }
 
         # 分级：这一组需要什么强度的验证
-        tier = a.get("tier") or verification_tier(
-            a.get("group"), sg, None,
-            sg.get("evidence"))
+        requested_tier = a.get("tier")
+        tier = required_tier
+        if isinstance(requested_tier, str) and tier_rank.get(requested_tier, -1) > tier_rank[tier]:
+            tier = requested_tier
         sg["aiJudgement"]["verificationTier"] = tier
+        sg["tier"] = tier
 
-        has_confirmation = isinstance(conf, dict) and conf.get("holds") is not None
-        has_verification = bool((ver.get("method") or "").strip())
+        has_confirmation = isinstance(conf.get("holds"), bool)
+        has_hypothesis = isinstance(a.get("hypothesis"), str) and bool(a["hypothesis"].strip())
+        has_method = isinstance(ver.get("method"), str) and bool(ver["method"].strip())
+        has_findings = isinstance(ver.get("findings"), str) and bool(ver["findings"].strip())
+        has_verification = has_method
 
         # 按级别检查完整性
         if tier == "direct":
@@ -1030,7 +1139,7 @@ def apply_answers(nodes, answers_path):
                 sg.setdefault("evidence", []).append(
                     "标为直接定，但没有给出任何证据")
             else:
-                sg["needsCheck"] = not bool(conf.get("holds"))
+                sg["needsCheck"] = not (conf.get("holds") is True)
         elif tier == "verify":
             # 要验：至少要 method
             if not has_verification:
@@ -1039,22 +1148,29 @@ def apply_answers(nodes, answers_path):
                 sg["needsCheck"] = True
                 sg.setdefault("evidence", []).append("未给出验证过程")
             else:
-                sg["needsCheck"] = not bool(conf.get("holds"))
+                sg["needsCheck"] = not (conf.get("holds") is True)
         else:  # full
-            # 必须三步
-            if not (has_confirmation and has_verification):
+            # 必须具备猜想、验证（方法与发现）和布尔确认结论。
+            if not (has_hypothesis and has_method and has_findings and has_confirmation):
                 incomplete.append((a.get("parent"), a.get("group"),
-                                   not has_verification, not has_confirmation))
+                                   not (has_hypothesis and has_method and has_findings), not has_confirmation))
                 sg["needsCheck"] = True
                 missing = []
-                if not has_verification:
-                    missing.append("验证过程")
+                if not has_hypothesis:
+                    missing.append("猜想")
+                if not (has_method and has_findings):
+                    missing.append("完整验证过程")
                 if not has_confirmation:
                     missing.append("确认结论")
                 sg.setdefault("evidence", []).append(
                     "必须三步但未给出" + "、".join(missing))
             else:
-                sg["needsCheck"] = not bool(conf.get("holds"))
+                sg["needsCheck"] = not (conf.get("holds") is True)
+
+        if invalid_target:
+            sg["needsCheck"] = True
+            sg.setdefault("evidence", []).append(
+                "回填目标未与 zones 中唯一的路径或标签精确匹配，未采用")
 
         applied += 1
 
@@ -1071,21 +1187,6 @@ def apply_answers(nodes, answers_path):
     return applied, missed
 
 def main():
-    _boot_rules()
-
-    # 读 policy.json 的 mapping（S0 前置确认的产物）
-    # 规则包的 mapping 是通用模板（全 null），具体的名字在这里
-    if "--root" in sys.argv:
-        try:
-            _r = sys.argv[sys.argv.index("--root") + 1]
-        except IndexError:
-            _r = None
-        if _r:
-            _mapping, _setup = load_policy_mapping(_r)
-            if _mapping:
-                n = apply_policy_mapping(_mapping)
-                print(f"policy.json 映射已生效: {n} 条规则, "
-                      f"{len(_mapping)} 个类别", file=sys.stderr)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--root', required=True)
     ap.add_argument('--probe')
@@ -1096,6 +1197,18 @@ def main():
     args = ap.parse_args()
 
     root = os.path.abspath(args.root)
+    try:
+        _boot_rules(root)
+    except Exception as exc:
+        ap.error(f"规则包加载失败: {exc}")
+
+    # 读 policy.json 的本地 mapping，覆盖共享规则的默认目标名。
+    _mapping, _setup = load_policy_mapping(root)
+    if _mapping:
+        n = apply_policy_mapping(_mapping)
+        print(f"policy.json 映射已生效: {n} 条规则, "
+              f"{len(_mapping)} 个类别", file=sys.stderr)
+
     probe_dir = Path(args.probe) if args.probe else Path(root) / '_organize' / 'probe'
 
     probes, units, groups = load_probes(probe_dir)
@@ -1112,8 +1225,17 @@ def main():
 
     for n in nodes:
         for g in n["groups"]:
-            s = suggest_group(g["name"], n["name"], zones, n["path"])
+            group_path = None
+            for unit in g.get("units", []):
+                if isinstance(unit, str):
+                    candidate = unit if os.path.isabs(unit) else os.path.join(n["path"], unit)
+                    if os.path.isdir(candidate):
+                        group_path = candidate
+                        break
+            s = suggest_group(g["name"], n["name"], zones, n["path"], group_path)
             g["suggest"] = s
+            s["tier"] = verification_tier(g["name"], s)
+            s.setdefault("aiJudgement", None)
             total += 1
 
             # 记下既没移动也没新建、且内容形态明确的组
@@ -1183,6 +1305,9 @@ def main():
                                   sample_file_names(gp) if gp else [],
                                   trigger=why)
             q["trigger"] = why
+            q["nodeId"] = n.get("id")
+            q["groupId"] = g.get("id")
+            q["status"] = "pending"
             q["triggerText"] = AI_TRIGGERS.get(why, why)
             ai_questions.append(q)
 
@@ -1222,7 +1347,35 @@ def main():
 
     # --answers：回填 AI 判断
     if args.answers:
-        applied, missed = apply_answers(nodes, args.answers)
+        applied, missed = apply_answers(nodes, args.answers, zones=zones)
+        by_group_id = {(n.get("id"), g.get("id")): (n, g)
+                       for n in nodes for g in n["groups"]}
+        for q in data["aiQuestions"]:
+            pair = by_group_id.get((q.get("nodeId"), q.get("groupId")))
+            if pair:
+                n, g = pair
+                q["aiJudgement"] = (g.get("suggest") or {}).get("aiJudgement")
+                q["tier"] = (g.get("suggest") or {}).get("tier")
+                q["status"] = "confirmed" if not (g.get("suggest") or {}).get("needsCheck", True) else "needs_review"
+        all_groups = [g for n in nodes for g in n["groups"]]
+        data["summary"] = {
+            "total": len(all_groups),
+            "keep": sum((g.get("suggest") or {}).get("mode") == "keep" for g in all_groups),
+            "move": sum((g.get("suggest") or {}).get("mode") == "move" for g in all_groups),
+            "new": sum((g.get("suggest") or {}).get("mode") == "new" for g in all_groups),
+            "needCheck": sum(bool((g.get("suggest") or {}).get("needsCheck")) for g in all_groups),
+        }
+        refreshed_new = {}
+        for g in all_groups:
+            sg = g.get("suggest") or {}
+            if sg.get("mode") == "new":
+                cat_name = sg.get("newName")
+                if cat_name:
+                    item = refreshed_new.setdefault(cat_name, {
+                        "name": cat_name, "parent": sg.get("newParent"), "count": 0})
+                    item["count"] += 1
+        data["newDirs"] = sorted(refreshed_new.values(),
+                                 key=lambda x: -x["count"])
         print(f"回填 {applied} 组判断", file=sys.stderr)
         if missed:
             print(f"  {missed} 条没找到对应组（已忽略）", file=sys.stderr)
@@ -1240,8 +1393,9 @@ def main():
 
     print(f'已生成: {out}')
     print(f'  {len(nodes)} 节点 / {total} 组')
-    print(f'  保持原位 {keep} · 移到已有区 {move} · 建议新建 {new}')
-    print(f'  需确认 {need_check} 组')
+    summary = data["summary"]
+    print(f'  保持原位 {summary["keep"]} · 移到已有区 {summary["move"]} · 建议新建 {summary["new"]}')
+    print(f'  需确认 {summary["needCheck"]} 组')
     if new_dirs:
         print('  建议新建的目录:')
         for d in data["newDirs"]:
