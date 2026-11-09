@@ -390,6 +390,11 @@ def guard(path, root, markers, descendants=False, allow_root=False):
         # 第二类只在它是被移动对象本身时才算危险——移动整个项目（内部含 venv）
         # 是正常操作，venv 记的是基础解释器路径，不是自身位置。
         env_dirs = {'venv', '.venv', 'node_modules', 'site-packages'}
+        # 这些名字只在浅层（depth <= 2）才当作真系统目录
+        SYSTEM_LIKE = {'windows', 'program files', 'program files (x86)',
+                       'appdata', 'system volume information', '$recycle.bin',
+                       'steamapps', 'steamlibrary', 'games', 'battle.net',
+                       'epic games', 'my games', 'shaderpacks'}
         root_key = key(path)
         for folder, dirs, files in os.walk(path, followlinks=False, onerror=fail):
             for name in dirs + files:
@@ -398,14 +403,21 @@ def guard(path, root, markers, descendants=False, allow_root=False):
                     raise SafetyError('目录包含链接或重解析项')
                 if name.casefold() not in PROTECTED_NAMES or not child.is_dir():
                     continue
+                depth = len(Path(child).relative_to(path).parts)
                 if name.casefold() in env_dirs:
                     # 环境目录只在两种情况下拦：
                     #   1. 它本身就是被移动对象
                     #   2. 它在项目根下一层（典型 venv 位置）
                     # 深处的一律放过——那是程序自带的资源
                     # （如 PyCharm 的 typeshed/stdlib/venv 只是类型存根目录）
-                    depth = len(Path(child).relative_to(path).parts)
                     if key(child) != root_key and depth > 2:
+                        continue
+                elif name.casefold() in SYSTEM_LIKE:
+                    # 系统类名字只对浅层有意义：
+                    #   windows / program files / appdata 出现在第三层以下
+                    #   多半是程序自己的资源目录（PyCharm 的 pydevd\windows）
+                    #   不是真的系统目录
+                    if depth > 2:
                         continue
                 raise SafetyError('目录包含受保护的程序或状态目录')
     return path
