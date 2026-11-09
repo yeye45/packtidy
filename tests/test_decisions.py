@@ -453,5 +453,103 @@ class TestQuestionPackage(unittest.TestCase):
         self.assertIn("holds", ro["fields"]["confirmation"])
 
 
+
+
+class TestVerificationTier(unittest.TestCase):
+    """分级：不是所有判断都要写完整三步。"""
+
+    def test_structural_signal_is_direct(self):
+        sug = {"mode": "keep", "evidence": ["unity-layout: true"]}
+        self.assertEqual(D.verification_tier("x", sug), "direct")
+
+    def test_vm_layout_is_direct(self):
+        sug = {"mode": "keep", "evidence": ["vm-layout: true"]}
+        self.assertEqual(D.verification_tier("x", sug), "direct")
+
+    def test_split_requires_full(self):
+        sug = {"mode": "split", "evidence": []}
+        self.assertEqual(D.verification_tier("x", sug), "full")
+
+    def test_merge_requires_full(self):
+        sug = {"mode": "merge", "evidence": []}
+        self.assertEqual(D.verification_tier("x", sug), "full")
+
+    def test_conflict_requires_full(self):
+        sug = {"mode": "keep", "needsCheck": True, "evidence": ["冲突"]}
+        self.assertEqual(D.verification_tier("x", sug), "full")
+
+    def test_new_requires_full(self):
+        sug = {"mode": "new", "evidence": []}
+        self.assertEqual(D.verification_tier("x", sug), "full")
+
+    def test_shape_evidence_requires_verify(self):
+        sug = {"mode": "keep", "evidence": ["内容以 installer 为主"]}
+        self.assertEqual(D.verification_tier("x", sug), "verify")
+
+    def test_empty_evidence_defaults_verify(self):
+        sug = {"mode": "keep", "evidence": []}
+        self.assertEqual(D.verification_tier("x", sug), "verify")
+
+    def test_question_carries_tier(self):
+        sug = {"mode": "split", "evidence": []}
+        q = D.build_ai_question("g", "p", "/x", sug, None, [],
+                                trigger="no_rule_match")
+        self.assertEqual(q["requiredOutput"]["tier"], "full")
+        self.assertIn("tierGuide", q["requiredOutput"])
+
+
+class TestTierEnforcement(unittest.TestCase):
+    """按级别检查完整性。"""
+
+    def _nodes(self):
+        return [{"name": "P", "groups": [
+            {"name": "D", "suggest": {"mode": "keep",
+                                      "evidence": ["unity-layout: true"]}},
+            {"name": "V", "suggest": {"mode": "keep",
+                                      "evidence": ["内容以 installer 为主"]}},
+            {"name": "F", "suggest": {"mode": "split", "evidence": []}},
+        ]}]
+
+    def _write(self, answers):
+        import json, tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as f:
+            json.dump({"answers": answers}, f, ensure_ascii=False)
+            return f.name
+
+    def test_direct_needs_only_evidence(self):
+        """直接定的只要 evidence，不要求三步。"""
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "D", "category": "x", "label": "X",
+            "evidence": "steamapps/ 下有 appmanifest_*.acf",
+            "confirmation": {"holds": True, "confidence": "high"}}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][0]["suggest"]
+        self.assertEqual(g["aiJudgement"]["verificationTier"], "direct")
+        self.assertFalse(g["needsCheck"], "直接定不该因为缺 verification 被拦")
+        os.unlink(path)
+
+    def test_direct_without_evidence_blocked(self):
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "D", "category": "x", "label": "X",
+            "confirmation": {"holds": True}}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][0]["suggest"]
+        self.assertTrue(g["needsCheck"])
+
+    def test_full_requires_three_steps(self):
+        nodes = self._nodes()
+        path = self._write([{
+            "parent": "P", "group": "F", "category": "x", "label": "X",
+            "evidence": "有内容"}])
+        D.apply_answers(nodes, path)
+        g = nodes[0]["groups"][2]["suggest"]
+        self.assertEqual(g["aiJudgement"]["verificationTier"], "full")
+        self.assertTrue(g["needsCheck"], "必须三步的缺步骤应仍待确认")
+        os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

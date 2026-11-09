@@ -524,23 +524,29 @@ def build_ai_question(group_name, node_name, node_path, suggest,
         },
         "question": _ai_question_text(suggest, shape, trigger),
         "requiredOutput": {
-            "flow": "猜想 → 验证 → 确认，三步都要走",
+            "tier": _question_tier(suggest),
+            "tierGuide": {
+                "direct": "结构信号即证据 → 一句话结论 + evidence 即可",
+                "verify": "名字有歧义或内容不明 → 写 hypothesis + method/findings",
+                "full": "涉及边界/合并/名实冲突 → 猜想 + 验证 + 确认，缺一不可",
+            },
+            "flow": "猜想 → 验证 → 确认",
             "fields": {
                 "hypothesis": "最初认为这是什么（写完再去验）",
                 "verification": {
-                    "method": "怎么查的：查了哪个站、看了什么文件",
+                    "method": "怎么查的：先本地（类型分布/文件头/条目表），"
+                              "不行才联网",
                     "findings": "查到什么，支持还是推翻猜测",
-                    "disproved": "推翻过什么假设（空数组也要说明没推翻）",
+                    "disproved": "推翻过什么假设",
                 },
                 "confirmation": {
                     "holds": "true/false——你的判断站得住吗",
                     "confidence": "high/medium/low",
-                    "why": "为什么确认（或为什么不确认）",
+                    "why": "为什么确认",
                     "residualRisk": "还剩什么不确定",
                 },
             },
-            "note": "代码不检查你验得够不够。它会原样记下这条链，"
-                    "人看到推理过程自己判断。",
+            "note": "code 只检查该级别的字段有没有给全，不检查写得够不够。",
         },
     }
 
@@ -740,6 +746,60 @@ def is_category_node(name):
     return any(low == c.casefold() for c in CATEGORY_NODE_NAMES)
 
 
+# ═══════════════════════════════════════════════════════════
+# 验证分级：不是每个判断都值得写完整三步
+#
+#   direct   结构信号本身即证据 → 一句话结论就够
+#   verify   名字有歧义、内容要看才明白 → 写验证，一行够
+#   full     涉及边界、合并、名实冲突 → 必须三步
+# ═══════════════════════════════════════════════════════════
+
+# 这些信号命中的，本身就是证据，不需要额外验证
+DIRECT_SIGNALS = {
+    "unity-layout", "vm-layout", "engine-payload", "save-binding",
+    "bin-plus-data", "volume-parts",
+}
+
+
+def verification_tier(group, suggest, shape=None, evidence=None):
+    """判断这一组需要什么级别的验证。
+
+    返回 'direct' / 'verify' / 'full'
+    """
+    ev = evidence or (suggest.get("evidence") or [])
+    ev_text = " ".join(str(e) for e in ev)
+
+    # ① 结构信号命中 → 直接定
+    for sig in DIRECT_SIGNALS:
+        if sig in ev_text:
+            return "direct"
+
+    # ② 涉及边界或合并 → 必须三步
+    mode = suggest.get("mode")
+    if mode in ("split", "merge"):
+        return "full"
+    # 形态与名字冲突
+    if suggest.get("needsCheck"):
+        return "full"
+    # 候选类别命名（涉及新建，判断影响面大）
+    if mode == "new":
+        return "full"
+
+    # ③ 其余：名字有歧义或内容不明 → 要验
+    if shape and shape.get("kind") in ("mixed", "empty"):
+        return "verify"
+    if ev_text and ("installer" in ev_text or "media" in ev_text
+                    or "code" in ev_text):
+        return "verify"
+
+    return "verify"
+
+
+def _question_tier(suggest):
+    """这一组该走哪一级验证。"""
+    return verification_tier(None, suggest)
+
+
 def apply_answers(nodes, answers_path):
     """把 AI 的判断回填。代码只记录，不做确认。
 
@@ -834,25 +894,51 @@ def apply_answers(nodes, answers_path):
             },
         }
 
-        # 事实性记录：AI 有没有做完确认
+        # 分级：这一组需要什么强度的验证
+        tier = a.get("tier") or verification_tier(
+            a.get("group"), sg, None,
+            sg.get("evidence"))
+        sg["aiJudgement"]["verificationTier"] = tier
+
         has_confirmation = isinstance(conf, dict) and conf.get("holds") is not None
         has_verification = bool((ver.get("method") or "").strip())
 
-        if not (has_confirmation and has_verification):
-            incomplete.append((a.get("parent"), a.get("group"),
-                               not has_verification, not has_confirmation))
-            # 代码不降级，只标出"这一步没做完"，仍进待确认
-            sg["needsCheck"] = True
-            missing = []
+        # 按级别检查完整性
+        if tier == "direct":
+            # 直接定：只要证据，不要求三步
+            ok = bool(a.get("evidence")) or has_verification
+            if not ok:
+                incomplete.append((a.get("parent"), a.get("group"),
+                                   True, True))
+                sg["needsCheck"] = True
+                sg.setdefault("evidence", []).append(
+                    "标为直接定，但没有给出任何证据")
+            else:
+                sg["needsCheck"] = not bool(conf.get("holds"))
+        elif tier == "verify":
+            # 要验：至少要 method
             if not has_verification:
-                missing.append("验证过程")
-            if not has_confirmation:
-                missing.append("确认结论")
-            sg.setdefault("evidence", []).append(
-                "AI 未给出" + "、".join(missing))
-        else:
-            # AI 自己确认过 → 按它说的记录，不做二次判断
-            sg["needsCheck"] = not bool(conf.get("holds"))
+                incomplete.append((a.get("parent"), a.get("group"),
+                                   True, False))
+                sg["needsCheck"] = True
+                sg.setdefault("evidence", []).append("未给出验证过程")
+            else:
+                sg["needsCheck"] = not bool(conf.get("holds"))
+        else:  # full
+            # 必须三步
+            if not (has_confirmation and has_verification):
+                incomplete.append((a.get("parent"), a.get("group"),
+                                   not has_verification, not has_confirmation))
+                sg["needsCheck"] = True
+                missing = []
+                if not has_verification:
+                    missing.append("验证过程")
+                if not has_confirmation:
+                    missing.append("确认结论")
+                sg.setdefault("evidence", []).append(
+                    "必须三步但未给出" + "、".join(missing))
+            else:
+                sg["needsCheck"] = not bool(conf.get("holds"))
 
         applied += 1
 
