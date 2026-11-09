@@ -347,13 +347,26 @@ def name_stem(group_name):
     # 去括号内容
     s = _re.sub(r"[（(【\[].*?[)）】\]]", "", s)
 
-    # 先按"与 / 和 / 及"切成主次，取主词
+    # 按"与 / 和 / 及"切成主次，取主词
     for sep in ("与", "和", "及", "/", "、"):
         if sep in s:
             head = s.split(sep)[0].strip()
             if len(head) >= 2:
                 s = head
                 break
+
+    # 空格分隔时，取前半段——但要求前半段不是纯数字/纯符号
+    # （"4K 壁纸" 的前半段是 "4K"，有字母，保留整段；
+    #   "VOCALOID 编辑器" 的前半段是 "VOCALOID"，取前半段）
+    # 空格分隔：只有当前半段"本身是词根"时才切
+    # "VOCALOID 编辑器"  前半段 VOCALOID 是完整词 → 切
+    # "4K 壁纸"         前半段 4K 是规格不是词根 → 不切，保留整段
+    if " " in s:
+        head = s.split(" ")[0].strip()
+        is_word = (any("\u4e00" <= ch <= "\u9fff" for ch in head)
+                   or (head.isascii() and head.isalpha() and len(head) >= 3))
+        if is_word:
+            s = head
 
     # 去通用后缀（可能连续出现）
     changed = True
@@ -449,8 +462,7 @@ def _common_prefix(names):
         while i < len(prefix) and i < len(n) and prefix[i] == n[i]:
             i += 1
         prefix = prefix[:i]
-        if len(prefix) < 2:
-            return ""
+    # 单字前缀也保留——"A" 是有效线索，调用方可自行决定是否采用
     return prefix
 
 
@@ -507,23 +519,40 @@ def suggest_group(group_name, node_name, zones, node_path=None,
             continue
 
         # 名字命中了，但如果内容形态与目标类别冲突，必须标出待确认
+        #
+        # 冲突的定义：目标是"成品"类，但内容是"工具"类（或反之）。
+        # 判断靠目标类别的性质，不靠具体词表——
+        # 词表会漏，"歌声合成"这种既含工具又含产物的名字必然踩坑。
         conflict = False
         if shape:
             kind = shape["kind"]
-            targets_text = " ".join(rule["to"]).lower()
-            # 装的是安装包，却要归到"音乐/视频/图像" → 冲突
-            if kind == "installer" and any(
-                    w in targets_text for w in
-                    ("音乐", "music", "影视", "video", "图像", "image",
-                     "学习", "study", "book")):
+            targets_text = " ".join(str(t) for t in rule["to"]).lower()
+
+            def has_any(words):
+                return any(w.lower() in targets_text for w in words)
+
+            # 成品类目标的特征词
+            PRODUCT_WORDS = (
+                "音乐", "歌曲", "影视", "视频", "电影", "图像", "图片",
+                "漫画", "书", "文档", "曲", "music", "video", "movie",
+                "image", "comic", "book", "document", "photo")
+            # 工具类目标的特征词
+            TOOL_WORDS = (
+                "安装包", "工具", "软件", "程序", "代码", "驱动", "镜像",
+                "模板", "字体", "模型", "installer", "tool", "software",
+                "code", "driver", "template", "model")
+
+            if kind == "installer" and has_any(PRODUCT_WORDS):
                 conflict = True
-                evidence.append("内容主要是安装包，与名字指示的类别不符")
-            # 装的是成品媒体，却要归到"安装包/工具" → 冲突
-            if kind == "media" and any(
-                    w in targets_text for w in
-                    ("安装包", "installer", "工具", "tool", "代码", "code")):
+                evidence.append(
+                    "内容以安装包为主，但目标类别是成品类——可能是工具/素材")
+            elif kind == "media" and has_any(TOOL_WORDS):
                 conflict = True
-                evidence.append("内容是成品媒体，与名字指示的类别不符")
+                evidence.append(
+                    "内容是成品媒体，但目标类别是工具类——可能名字有歧义")
+            elif kind == "code" and has_any(PRODUCT_WORDS):
+                conflict = True
+                evidence.append("内容是源码，但目标类别是成品类")
 
         for t in rule["to"]:
             cands = [z for z in zones if t.lower() in z["label"].lower()]

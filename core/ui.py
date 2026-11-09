@@ -343,7 +343,7 @@ BODY = r"""
   <div class="cta" id="coreCta"></div>
 </div>
 
-<div class="stage"><div class="wrap" id="main"></div></div>
+<div class="stage"><div class="wrap"><div id="proposals"></div><div id="main"></div></div></div>
 
 <div class="status">
   <span id="stA">—</span><span style="color:var(--line2)">·</span>
@@ -448,6 +448,47 @@ function renderCore(){
   document.getElementById('coreCta').innerHTML =
     `<button class="btn" onclick="showList()">生成执行清单</button>` +
     `<button class="btn gh" onclick="acceptAll()">全部采纳</button>`;
+
+  renderProposals();
+}
+
+/* 候选类别：规则包没覆盖、但多个组共享特征的 */
+function renderProposals(){
+  const el = document.getElementById('proposals');
+  if(!el) return;
+  const p = DATA.proposedCategories || {};
+  const keys = Object.keys(p);
+  if(!keys.length){ el.innerHTML = ''; return; }
+
+  el.innerHTML = `
+    <div class="needcard" style="border-color:var(--new,#7c4dbd)">
+      <div class="hd" style="background:color-mix(in srgb,#7c4dbd 8%,var(--surface));
+           border-color:color-mix(in srgb,#7c4dbd 25%,var(--line));
+           color:var(--new,#7c4dbd)">
+        可能的候选类别　${keys.length} 个
+      </div>
+      ${keys.map(k => {
+        const v = p[k];
+        return `<div class="needitem">
+          <div>
+            <div class="nm">${esc(k)}</div>
+            <div class="ds">${v.count} 组共享这一特征
+              ${v.basis ? `（${esc(v.basis)}）` : ''}
+              ${v.kinds && v.kinds.length ? `<br>内容形态：${esc(v.kinds.join(' / '))}` : ''}
+            </div>
+            <div class="ds" style="color:var(--fg3);margin-top:3px">
+              ${v.members.map(m => esc(m)).join('　·　')}
+            </div>
+          </div>
+          <div></div>
+        </div>`;
+      }).join('')}
+      <div style="padding:11px 16px;font-size:12px;color:var(--fg3);
+                  border-top:1px solid var(--line)">
+        这些是<b>建议</b>，不会自动创建。确认有用的话，
+        把它们加进规则包的 categories，下次就能自动识别。
+      </div>
+    </div>`;
 }
 
 function render(){
@@ -784,19 +825,35 @@ def main():
 
     # 用 decisions 模块算候选去向（含 3 层）和建议
     zones_raw = dec_mod.collect_zones(root)
-    # 为每组附加建议
+
+    # 为每组附加建议；顺带收集匹配不上的，用于发现新类别
+    unmatched = []
     for n in nodes:
         for g in n['groups']:
             g['relationText'] = dec_mod.RELATION_TEXT.get(
                 g.get('relation', ''), g.get('relation', ''))
-            g['suggest'] = dec_mod.suggest_group(
+            sug = dec_mod.suggest_group(
                 g['name'], n['name'], zones_raw, n['path'])
+            g['suggest'] = sug
+            if sug['mode'] == 'keep' and sug.get('evidence'):
+                for k in ('installer', 'media', 'image', 'code',
+                          'document', 'archive'):
+                    if any(k in e for e in sug['evidence']):
+                        unmatched.append((g['name'], k))
+                        break
 
     data = {
         'root': root,
         'generated': datetime.now().strftime('%Y-%m-%d %H:%M'),
         'nodes': nodes,
         'zones': zones_raw,
+        'proposedCategories': {
+            stem: {'count': info['count'],
+                   'kinds': sorted(info['kinds']),
+                   'basis': info['basis'],
+                   'members': info['members'][:6]}
+            for stem, info in dec_mod.propose_new_categories(unmatched).items()
+        },
     }
 
     out = Path(args.out) if args.out else Path(root) / '_organize' / 'ui.html'
