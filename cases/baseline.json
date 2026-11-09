@@ -1,0 +1,80 @@
+{
+  "_about": "回归基准。每条都是人工确认过的判断。",
+  "_note": "新增用例前先跑 record，然后人工核对——当前判断不等于正确。",
+  "cases": [
+    {
+      "name": "VOCALOID 目录 → 歌声合成工具，不是音乐成品",
+      "kind": "suggest",
+      "group": "VOCALOID 编辑器与声库",
+      "parent": "下载",
+      "expectMode": "move",
+      "_why": "内容是 10 个 Setup 型安装包（编辑器 + 各歌手声库），不是成品曲。\n名字含'音源'容易误判为音乐类，实际是工具+素材。\n代码侧应有 content_shape=installer，且与 music 类冲突要标 needsCheck。",
+      "_note": "有候选区时返回 move（规则命中且目标存在）；盘上真没有对应分类时才返回 new。"
+    },
+    {
+      "name": "ASMR 音声 → 成人音声类",
+      "kind": "suggest",
+      "group": "ASMR-34672",
+      "parent": "番",
+      "expectMode": "move",
+      "_why": "名字含 ASMR，命中 adult_audio。在番剧目录里属放错位置。",
+      "_note": "有候选区时返回 move（规则命中且目标存在）；盘上真没有对应分类时才返回 new。"
+    },
+    {
+      "name": "番剧 rar → 动画类",
+      "kind": "suggest",
+      "group": "某番剧 01-12 合集",
+      "parent": "下载",
+      "expectMode": "move",
+      "_why": "名字含'番剧'，命中 video_series。",
+      "_note": "有候选区时返回 move（规则命中且目标存在）；盘上真没有对应分类时才返回 new。"
+    },
+    {
+      "name": "Python 教程 → 课程类",
+      "kind": "suggest",
+      "group": "python教程合集",
+      "parent": "下载",
+      "expectMode": "move",
+      "_why": "名字含'教程'，命中 video_course，该进学习资料。",
+      "_note": "有候选区时返回 move（规则命中且目标存在）；盘上真没有对应分类时才返回 new。"
+    },
+    {
+      "name": "装机工具 → 工具类，不是系统镜像",
+      "kind": "suggest",
+      "group": "刷机工具与驱动合集",
+      "parent": "下载",
+      "expectMode": "move",
+      "_why": "名字含'刷机''驱动'，命中 install_tool（工具），\n不是 system_image（镜像成品）。这条区分是后加的——\n原来混在一个类里，工具和成品没分开。",
+      "_note": "有候选区时返回 move（规则命中且目标存在）；盘上真没有对应分类时才返回 new。"
+    },
+    {
+      "name": "VOCALOID 编辑器与声库",
+      "kind": "stem",
+      "expect": "VOCALOID",
+      "_why": "'与'前面的主词才是类别词根。"
+    },
+    {
+      "name": "编程课程合集",
+      "kind": "stem",
+      "expect": "编程课程",
+      "_why": "去掉'合集'后缀。"
+    },
+    {
+      "name": "4K 壁纸打包",
+      "kind": "stem",
+      "expect": "4K 壁纸",
+      "_why": "空格不能硬切——4K 是规格不是词根，切了就丢语义。"
+    },
+    {
+      "name": "RJ123456 某作",
+      "kind": "stem",
+      "expect": "某作",
+      "_why": "去数字时不能把 RJ123456 截成 'RJ' 留下残渣。"
+    }
+  ],
+  "_pending": [
+    "S2 的边界判断用例（套壳、空壳、分卷）需要真实目录，暂缺",
+    "S3 的四类关系（集数互补/多季多版本/跨层重复/形态类聚）需要真实样本",
+    "验证分级的完整覆盖（direct/verify/full 各至少一条）"
+  ]
+}

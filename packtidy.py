@@ -213,6 +213,23 @@ def cmd_rules(args):
         sys.argv = old
 
 
+def cmd_setup(args):
+    su = _load("setup", "setup.py")
+    argv = [args.action]
+    if args.action == "apply":
+        if not args.answers:
+            sys.exit("apply 需要 --answers")
+        argv += [args.root, args.answers]
+    else:
+        argv.append(args.root)
+    old = sys.argv
+    sys.argv = ["setup"] + argv
+    try:
+        return su.main(argv)
+    finally:
+        sys.argv = old
+
+
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -266,6 +283,12 @@ def main(argv=None):
     s = sub.add_parser("recover", help="中断恢复")
     s.add_argument("root")
     s.set_defaults(func=cmd_recover)
+
+    s = sub.add_parser("setup", help="整理前的一次性确认")
+    s.add_argument("action", choices=("ask", "apply", "show"))
+    s.add_argument("root")
+    s.add_argument("--answers")
+    s.set_defaults(func=cmd_setup)
 
     s = sub.add_parser("decisions", help="算建议 / 生成 AI 问题 / 回填答案")
     s.add_argument("root")

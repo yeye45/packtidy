@@ -56,6 +56,27 @@ def load_cases(path):
     return cases
 
 
+def _zones_from_rules(decisions_mod):
+    """从当前 CROSS_RULES 的 to 列表造候选区。
+
+    验证 suggest 时如果没给 zones，规则匹配上了也没地方可去，
+    结果永远是 keep——那样测不出任何东西。
+    """
+    zones = []
+    seen = set()
+    for rule in getattr(decisions_mod, "CROSS_RULES", []):
+        for name in rule.get("to") or []:
+            if name and name not in seen:
+                seen.add(name)
+                zones.append({
+                    "path": f"/virtual/{name}",
+                    "label": name,
+                    "depth": 1,
+                    "files": 10,
+                })
+    return zones
+
+
 def run_case(case, decisions_mod):
     """跑一个用例，返回 (通过, 说明)。"""
     kind = case.get("kind", "suggest")
@@ -76,9 +97,12 @@ def run_case(case, decisions_mod):
                 f"{shape.get('ratio', 0):.0%}）")
 
     if kind == "stem":
-        actual = decisions_mod.name_stem(case.get("name", ""))
+        # input 优先；没有就用 name（用例名本身就是输入的情况）
+        src = case.get("input") or case.get("name") or ""
+        actual = decisions_mod.name_stem(src)
         expect = case.get("expect", "")
-        return (actual == expect, f"期望 {expect!r} / 实际 {actual!r}")
+        return (actual == expect,
+                f"{src!r} → 期望 {expect!r} / 实际 {actual!r}")
 
     if kind == "suggest":
         # 验建议
@@ -86,9 +110,16 @@ def run_case(case, decisions_mod):
         path = case.get("path")
         if path and os.path.isdir(path):
             shape = decisions_mod.content_shape(path)
+
+        zones = case.get("zones")
+        if not zones:
+            # 没给 zones 时，从规则包的 categories.suggest 造一份
+            # 否则什么都匹配不上，全返回 keep，测了等于没测
+            zones = _zones_from_rules(decisions_mod)
+
         sug = decisions_mod.suggest_group(
             case.get("group", ""), case.get("parent", ""),
-            case.get("zones") or [], node_path=case.get("nodePath"),
+            zones, node_path=case.get("nodePath"),
             group_path=path if (path and os.path.isdir(path)) else None)
 
         expect_mode = case.get("expectMode")

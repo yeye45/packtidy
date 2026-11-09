@@ -156,16 +156,32 @@ def count_files(path, limit=20000):
 def collect_zones(root, max_depth=3, min_files=1):
     """收集候选去向，最多 3 层。
 
-    每项：{path, label, depth, files}
-      label  相对路径，用 / 分隔（"文件/软件安装包"）
-      depth  1/2/3
-      files  文件数（粗估）
+    root 可以是单个路径，也可以是多个根（多盘）：
+      collect_zones("G:\\")
+      collect_zones(["D:\\", "E:\\", "F:\\"])
 
-    过滤规则：
-      - 跳过系统目录、下划线/点开头
-      - 跳过空目录（文件数 < min_files）
-      - 深度超过 max_depth 不再下探
+    多盘时每个 zone 带 root 字段标明属于哪个盘，
+    label 带上盘符前缀避免同名混淆。
+
+    每项：{path, label, depth, files, root}
     """
+    if isinstance(root, (list, tuple)):
+        out = []
+        seen = set()
+        for r in root:
+            r = os.path.abspath(str(r))
+            if not os.path.isdir(r) or r in seen:
+                continue
+            seen.add(r)
+            for z in collect_zones(r, max_depth, min_files):
+                z["root"] = r
+                # 多盘时 label 加盘符前缀，避免同名混淆
+                drive = os.path.splitdrive(r)[0] or r.rstrip(os.sep)
+                z["label"] = f"{drive}/{z['label']}"
+                out.append(z)
+        return out
+
+    root = os.path.abspath(str(root))
     zones = []
 
     def walk(path, label, depth):
@@ -332,22 +348,32 @@ _GENERIC_SUFFIX = [
 
 
 def name_stem(group_name):
-    """从组名提取可能的类别词根。
+    """从组名提取类别词根。
 
-    规则：去掉括号、去掉通用后缀、去掉版本号，
-    但**保留"X 与 Y"里的主词**，不按空格硬切。
+    顺序很重要：**先删编号，再切分**。
+    反过来会把 "RJ123456 某作" 的空格前半段 "RJ123456" 当成词根，
+    把真正的名字切掉。
 
     "VOCALOID 编辑器与声库" → "VOCALOID"
     "编程课程合集"          → "编程课程"
     "4K 壁纸打包"           → "4K 壁纸"
+    "RJ123456 某作"         → "某作"
     """
     import re as _re
 
-    s = group_name.strip()
-    # 去括号内容
+    s = (group_name or "").strip()
+
+    # ① 先去括号内容
     s = _re.sub(r"[（(【\[].*?[)）】\]]", "", s)
 
-    # 按"与 / 和 / 及"切成主次，取主词
+    # ② 删编号——必须在切分之前
+    #    RJ 号整段删，不能留 "RJ" 残渣
+    s = _re.sub(r"\bRJ\s*\d{6,8}\b", " ", s, flags=_re.I)
+    #    其它整段编号（纯数字串）
+    s = _re.sub(r"\b\d{4,}\b", " ", s)
+    s = _re.sub(r"\s{2,}", " ", s).strip()
+
+    # ③ 按"与 / 和 / 及"切主次，取主词
     for sep in ("与", "和", "及", "/", "、"):
         if sep in s:
             head = s.split(sep)[0].strip()
@@ -355,20 +381,21 @@ def name_stem(group_name):
                 s = head
                 break
 
-    # 空格分隔时，取前半段——但要求前半段不是纯数字/纯符号
-    # （"4K 壁纸" 的前半段是 "4K"，有字母，保留整段；
-    #   "VOCALOID 编辑器" 的前半段是 "VOCALOID"，取前半段）
-    # 空格分隔：只有当前半段"本身是词根"时才切
-    # "VOCALOID 编辑器"  前半段 VOCALOID 是完整词 → 切
-    # "4K 壁纸"         前半段 4K 是规格不是词根 → 不切，保留整段
+    # ④ 空格分隔：只有前半段本身像词根时才切
+    #    "VOCALOID 编辑器" → VOCALOID 是完整词 → 切
+    #    "4K 壁纸"         → 4K 是规格不是词根 → 不切
     if " " in s:
         head = s.split(" ")[0].strip()
-        is_word = (any("\u4e00" <= ch <= "\u9fff" for ch in head)
-                   or (head.isascii() and head.isalpha() and len(head) >= 3))
-        if is_word:
+        is_word = (
+            any("\u4e00" <= ch <= "\u9fff" for ch in head)
+            or (head.isascii() and head.isalpha() and len(head) >= 3)
+            or (head.isascii() and head[0].isupper() and len(head) >= 3)
+        )
+        # 纯数字/规格不算词根
+        if head and not head.replace(".", "").isdigit() and is_word:
             s = head
 
-    # 去通用后缀（可能连续出现）
+    # ⑤ 去通用后缀（可能连续出现）
     changed = True
     while changed:
         changed = False
@@ -377,17 +404,14 @@ def name_stem(group_name):
                 s = s[: -len(suf)].strip()
                 changed = True
 
-    # 去尾部的版本/日期/编号
+    # ⑥ 去尾部版本号
     s = _re.sub(r"[\s\-_]*v?[\d\.]+[a-zA-Z]?$", "", s, flags=_re.I).strip()
-    # 去尾部标点
     s = s.strip(" \t-_·,，")
 
-    # 词根至少要有一个汉字或 2 个字母
     has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in s)
     if not has_cjk and len(s) < 2:
         return ""
     return s
-
 
 def propose_new_categories(unmatched, min_groups=2):
     """从匹配不上的组里找新类别候选。
