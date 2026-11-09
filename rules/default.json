@@ -1,19 +1,18 @@
 {
-  "_about": "packtidy 规则包格式 v1",
-  "_note": "这是格式示例。真实规则包由维护者发布到独立仓库，packtidy 用 rules sync 拉取。",
+  "_about": "packtidy 规则包格式 v2",
+  "_note": "默认规则只描述「内容类型」，不指定具体目录名。目录名由本地 policy.json 的 mapping 决定。",
   "_schema": {
-    "version": "整数，规则包版本。本地缓存据此判断是否需要更新",
-    "minPacktidy": "最低兼容的 packtidy 版本，如 0.1.0",
+    "version": "整数，规则包版本",
+    "minPacktidy": "最低兼容的 packtidy 版本",
     "updated": "ISO 日期",
     "protected": "受保护目录名。命中即整棵不动",
     "nestedAllow": "受保护区内仍可整理的子目录名",
     "nestedDeny": "即使父级被放行，这些也不能动（优先级最高）",
-    "crossRules": "组名关键词 → 目标分类。按顺序匹配，先中先得",
-    "newCategories": "允许新建的分类。每个含父级归属和触发关键词",
-    "categoryNodes": "本身就是分类容器的顶层目录名，内部组默认不动"
+    "categories": "语义类别定义。每类含关键词与建议的目录名（供本地映射参考）",
+    "mapping": "类别 → 本地目录名。留空表示由 policy.json 填写"
   },
 
-  "version": 1,
+  "version": 2,
   "minPacktidy": "0.1.0",
   "updated": "2026-11-09",
 
@@ -42,42 +41,130 @@
     "$recycle.bin", "system volume information"
   ],
 
-  "crossRules": [
-    {"keys": ["番剧", "动画", "动漫"], "to": ["影视", "Video", "番"]},
-    {"keys": ["电影", "影片", "剧集", "短剧", "MV", "录屏"], "to": ["影视", "Video"]},
-    {"keys": ["教程", "课程", "网课", "科普", "讲座", "公开课"], "to": ["学习资料", "文档", "个人文档"]},
-    {"keys": ["ASMR", "音声"], "to": ["ASMR"]},
-    {"keys": ["galgame", "成人", "R18"], "to": ["H_Library"]},
-    {"keys": ["安装包", "破解", "插件", "绿色版"], "to": ["软件安装包"]},
-    {"keys": ["镜像", "刷机", "装机", "驱动"], "to": ["系统镜像"]},
-    {"keys": ["模型", "工作流", "词库", "LoRA", "embedding", "ComfyUI", "训练"], "to": ["AI工具"]},
-    {"keys": ["游戏", "Minecraft"], "to": ["游戏"]},
-    {"keys": ["备份", "还原点"], "to": ["backup"]},
-    {"keys": ["VOCALOID", "音源"], "to": ["VOCALOID"]},
-    {"keys": ["漫画", "同人志"], "to": ["漫画", "Doujin"]}
-  ],
+  "categories": {
+    "_comment": "每个类别：keys 是识别关键词，suggest 是常见目录名（供参考，可被本地覆盖）",
 
-  "newCategories": {
-    "电子书":   {"parent": "文档",   "keys": ["电子书", "小说", "epub"]},
-    "教材":     {"parent": "文档",   "keys": ["教材", "教科书", "课本"]},
-    "课程":     {"parent": "文档",   "keys": ["课程", "网课", "培训"]},
-    "字体":     {"parent": "文档",   "keys": ["字体", "字库", "font"]},
-    "刷机":     {"parent": "系统",   "keys": ["刷机", "ROM", "TWRP", "OTA", "救砖"]},
-    "驱动":     {"parent": "系统",   "keys": ["驱动", "driver"]},
-    "系统镜像": {"parent": "系统",   "keys": ["iso", "gho", "wim"]},
-    "素材":     {"parent": "设计",   "keys": ["素材", "笔刷", "预设"]},
-    "壁纸":     {"parent": null,     "keys": ["壁纸", "wallpaper"]},
-    "音效":     {"parent": null,     "keys": ["音效", "sound"]}
+    "video_series": {
+      "label": "剧集动画",
+      "keys": ["番剧", "动画", "动漫", "TV版", "第一季", "第二季", "OVA"],
+      "suggest": ["动画", "番剧", "Anime"]
+    },
+    "video_movie": {
+      "label": "电影影视",
+      "keys": ["电影", "影片", "剧集", "短剧", "纪录片"],
+      "suggest": ["影视", "电影", "Movies"]
+    },
+    "video_clip": {
+      "label": "短视频剪辑",
+      "keys": ["MV", "录屏", "鬼畜", "整活", "搬运", "混剪"],
+      "suggest": ["娱乐视频", "视频", "Clips"]
+    },
+    "video_course": {
+      "label": "课程讲座",
+      "keys": ["课程", "教程", "网课", "科普", "讲座", "公开课", "培训"],
+      "suggest": ["学习资料", "课程", "Courses"]
+    },
+
+    "adult_audio": {
+      "label": "成人音声",
+      "keys": ["ASMR", "音声", "同人音声"],
+      "suggest": ["成人音声", "ASMR"]
+    },
+    "adult_game": {
+      "label": "成人游戏",
+      "keys": ["galgame", "成人", "R18", "18禁", "エロ"],
+      "suggest": ["成人内容", "R18"]
+    },
+    "adult_image": {
+      "label": "成人图像",
+      "keys": ["同人志", "CG集", "图包"],
+      "suggest": ["成人图像", "R18"]
+    },
+
+    "software_installer": {
+      "label": "软件安装包",
+      "keys": ["安装包", "破解", "插件", "绿色版", "便携版"],
+      "suggest": ["软件安装包", "Installers"]
+    },
+    "system_image": {
+      "label": "系统镜像",
+      "keys": ["镜像", "刷机", "装机", "驱动", "ISO", "GHO", "WIM"],
+      "suggest": ["系统", "System"]
+    },
+
+    "ai_model": {
+      "label": "AI 模型与工作流",
+      "keys": ["模型", "工作流", "词库", "LoRA", "embedding",
+               "ComfyUI", "训练", "checkpoint", "VAE"],
+      "suggest": ["AI工具", "AI"]
+    },
+    "game": {
+      "label": "游戏",
+      "keys": ["游戏", "Minecraft", "存档"],
+      "suggest": ["游戏", "Games"]
+    },
+    "book": {
+      "label": "书籍教材",
+      "keys": ["电子书", "小说", "epub", "教材", "教科书", "课本"],
+      "suggest": ["电子书", "Books"]
+    },
+    "comic": {
+      "label": "漫画",
+      "keys": ["漫画", "同人志", "连载"],
+      "suggest": ["漫画", "Comics"]
+    },
+    "music": {
+      "label": "音乐音源",
+      "keys": ["音源", "VOCALOID", "BGM", "歌曲", "专辑", "声库", "采样"],
+      "suggest": ["音乐", "Music", "Audio"]
+    },
+    "document": {
+      "label": "个人文档",
+      "keys": ["文档", "简历", "合同", "表格", "报告"],
+      "suggest": ["文档", "Documents"]
+    },
+    "code": {
+      "label": "代码工程",
+      "keys": ["源码", "工程", "项目", "脚本"],
+      "suggest": ["代码", "Code"]
+    },
+    "backup": {
+      "label": "备份",
+      "keys": ["备份", "还原点", "快照"],
+      "suggest": ["备份", "Backup"]
+    },
+    "design_asset": {
+      "label": "设计素材",
+      "keys": ["素材", "笔刷", "预设", "字体", "模板"],
+      "suggest": ["素材", "Assets"]
+    }
   },
 
-  "categoryNodes": [
-    "AI工具", "H_Library", "番", "VOCALOID", "影视", "游戏",
-    "系统镜像", "软件安装包", "文档", "学习资料", "娱乐视频",
-    "Adobe", "PPT模板", "代码", "漫画", "backup",
-    "Media", "Doujin", "Documents", "Software"
-  ],
+  "mapping": {
+    "_comment": "类别 → 本地目录名。留空表示由用户的 policy.json 决定，packtidy 只提出建议",
+    "video_series": null,
+    "video_movie": null,
+    "video_clip": null,
+    "video_course": null,
+    "adult_audio": null,
+    "adult_game": null,
+    "adult_image": null,
+    "software_installer": null,
+    "system_image": null,
+    "ai_model": null,
+    "game": null,
+    "book": null,
+    "comic": null,
+    "music": null,
+    "document": null,
+    "code": null,
+    "backup": null,
+    "design_asset": null
+  },
 
   "_changelog": [
-    {"version": 1, "date": "2026-11-09", "note": "初始格式。含保护清单、嵌套白名单、跨类映射。"}
+    {"version": 2, "date": "2026-11-09",
+     "note": "改为语义类别 + 本地映射。不再内置任何具体目录名——原来的私人库名、单字简称等属于个人命名风格，不该写进通用规则。"},
+    {"version": 1, "date": "2026-11-09", "note": "初始格式。"}
   ]
 }

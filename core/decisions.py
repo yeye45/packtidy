@@ -39,22 +39,10 @@ RELATION_TEXT = {
 # ═══════════════════════════════════════════════════════════
 # 跨类规则：组名命中关键词 → 该去哪个已有类
 # ═══════════════════════════════════════════════════════════
-CROSS_RULES = [
-    {'keys': ['番剧', '动画', '动漫'],       'to': ['影视', 'Video', '番']},
-    {'keys': ['电影', '影片', '剧集', '短剧', 'MV', '录屏'],
-                                            'to': ['影视', 'Video']},
-    {'keys': ['ASMR', '音声'],              'to': ['ASMR']},
-    {'keys': ['galgame', '成人', 'R18'],     'to': ['H_Library']},
-    {'keys': ['安装包', '破解', '插件', '绿色版'],
-                                            'to': ['软件安装包']},
-    {'keys': ['课程', '教程', '教材'],        'to': ['文档', '个人文档']},
-    {'keys': ['镜像', '刷机', '装机', '驱动'], 'to': ['系统镜像']},
-    {'keys': ['模型', '工作流', '词库', 'LoRA', 'embedding',
-              'ComfyUI', '训练'],           'to': ['AI工具']},
-    {'keys': ['游戏', 'Minecraft'],          'to': ['游戏']},
-    {'keys': ['备份', '还原点'],             'to': ['backup']},
-    {'keys': ['VOCALOID', '音源'],           'to': ['VOCALOID']},
-]
+# 跨类映射由规则包提供（rules/default.json 的 categories + mapping）。
+# 这里留空——写死的映射必然会带出某个人的分类体系。
+CROSS_RULES = []
+
 
 # ═══════════════════════════════════════════════════════════
 # 新建分类白名单：只有这些才值得新建，而且指定归属父级
@@ -219,11 +207,13 @@ def collect_zones(root, max_depth=3, min_files=1):
 
 def looks_like_category(name):
     """判断子目录名是否像一个分类桶。"""
-    hits = ['文档', '个人文档', '软件安装包', 'ASMR', 'Picture', 'Doujin',
-            'Media', 'Video', '游戏', '影视', 'AI', '模型', '工作流',
-            '课程', '电子书', '书籍', '壁纸', '字体', '音声', 'CG',
-            'Comic', 'Novel', 'Software', 'Documents']
-    return any(h.lower() in name.lower() for h in hits)
+    # 通用分类词。具体名字由调用方的 zones 决定，这里只判断"像不像分类"
+    generic = ['文档', '软件', '安装包', '视频', '音频', '图片', '图像',
+               '游戏', '影视', '模型', '课程', '书', '音乐', '素材',
+               'document', 'software', 'video', 'audio', 'image', 'picture',
+               'game', 'model', 'course', 'book', 'music', 'asset']
+    low = name.lower()
+    return any(g in low for g in generic)
 
 
 def suggest_group(group_name, node_name, zones, node_path=None):
@@ -237,7 +227,7 @@ def suggest_group(group_name, node_name, zones, node_path=None):
                 'needsCheck': False}
 
     # ② 节点本身已经是分类目录 → 组在它内部，无需移动
-    #   （AI工具 / H_Library / 番 / VOCALOID 这类已经分好类的顶层区）
+    #   （本身就是分类容器的顶层区，其内部组无需再移动）
     if node_path and is_category_node(node_name or ''):
         return {'mode': 'keep',
                 'reason': '所在目录已是分类目录，组在内部无需移动',

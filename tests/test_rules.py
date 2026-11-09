@@ -15,11 +15,15 @@ import rules  # noqa: E402
 
 
 def minimal(**over):
+    """v2 最小合法结构。"""
     base = {
-        "version": 1,
+        "version": 2,
         "minPacktidy": "0.1.0",
         "protected": ["windows"],
-        "crossRules": [{"keys": ["番剧"], "to": ["影视"]}],
+        "categories": {
+            "video": {"label": "视频", "keys": ["电影", "影片"],
+                      "suggest": ["影视"]},
+        },
     }
     base.update(over)
     return base
@@ -38,25 +42,40 @@ class TestValidate(unittest.TestCase):
         self.assertTrue(any("protected" in p for p in problems))
 
     def test_version_must_be_int(self):
-        ok, problems = rules.validate(minimal(version="1"))
+        ok, _ = rules.validate(minimal(version="2"))
         self.assertFalse(ok)
 
     def test_protected_must_be_string_list(self):
         ok, _ = rules.validate(minimal(protected=[1, 2]))
         self.assertFalse(ok)
 
-    def test_cross_rules_shape(self):
-        ok, _ = rules.validate(minimal(crossRules=[{"keys": ["a"]}]))
-        self.assertFalse(ok)
-        ok2, _ = rules.validate(minimal(crossRules=[{"keys": ["a"], "to": ["b"]}]))
-        self.assertTrue(ok2)
-
-    def test_new_categories_needs_keys_and_parent(self):
-        ok, _ = rules.validate(minimal(newCategories={"x": {"keys": ["k"]}}))
-        self.assertFalse(ok)
+    def test_categories_shape(self):
+        ok, _ = rules.validate(minimal(categories={"a": {"label": "x"}}))
+        self.assertFalse(ok)   # 缺 keys
         ok2, _ = rules.validate(
-            minimal(newCategories={"x": {"keys": ["k"], "parent": None}}))
-        self.assertTrue(ok2)
+            minimal(categories={"a": {"keys": ["k"]}}))
+        self.assertTrue(ok2)   # label/suggest 可选
+
+    def test_suggest_must_be_list(self):
+        ok, _ = rules.validate(
+            minimal(categories={"a": {"keys": ["k"], "suggest": "x"}}))
+        self.assertFalse(ok)
+
+    def test_mapping_target_null_allowed(self):
+        ok, _ = rules.validate(
+            minimal(mapping={"video": None}))
+        self.assertTrue(ok)
+
+    def test_mapping_target_string_allowed(self):
+        ok, _ = rules.validate(
+            minimal(mapping={"video": "影视"}))
+        self.assertTrue(ok)
+
+    def test_mapping_unknown_category_warns(self):
+        ok, problems = rules.validate(
+            minimal(mapping={"nonexistent": "某目录"}))
+        self.assertTrue(ok)   # 只警告，不阻断
+        self.assertTrue(any("类别不存在" in p for p in problems))
 
     def test_underscore_fields_ignored(self):
         data = minimal(_comment="说明", _schema={})
@@ -65,7 +84,7 @@ class TestValidate(unittest.TestCase):
 
     def test_unknown_field_reported_but_passes(self):
         ok, problems = rules.validate(minimal(unknownField=1))
-        self.assertTrue(ok)   # 未知字段只警告不阻断
+        self.assertTrue(ok)   # 未知字段只警告不阻断（前向兼容）
         self.assertTrue(any("未知字段" in p for p in problems))
 
 
@@ -79,9 +98,9 @@ class TestLoad(unittest.TestCase):
             p = Path(d) / "r.json"
             p.write_text(json.dumps(minimal()), encoding="utf-8")
             data = rules.load(p)
-            self.assertEqual(data["version"], 1)
+            self.assertEqual(data["version"], 2)
 
-    def test_load_invalid_raises(self):
+    def test_load_invalid_json_raises(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "r.json"
             p.write_text("{bad json", encoding="utf-8")
@@ -91,7 +110,7 @@ class TestLoad(unittest.TestCase):
     def test_load_bad_schema_raises(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "r.json"
-            p.write_text(json.dumps({"version": 1}), encoding="utf-8")
+            p.write_text(json.dumps({"version": 2}), encoding="utf-8")
             with self.assertRaises(rules.RulesError):
                 rules.load(p)
 
@@ -100,12 +119,25 @@ class FakeMod:
     pass
 
 
+def new_safety():
+    m = FakeMod()
+    m.PROTECTED_NAMES = set()
+    m.NESTED_ALLOW = set()
+    m.NESTED_DENY = set()
+    return m
+
+
+def new_decisions():
+    m = FakeMod()
+    m.CROSS_RULES = []
+    m.NEW_CATEGORIES = {}
+    m.CATEGORY_NODE_NAMES = set()
+    return m
+
+
 class TestApplyTo(unittest.TestCase):
     def test_applies_safety(self):
-        safety = FakeMod()
-        safety.PROTECTED_NAMES = set()
-        safety.NESTED_ALLOW = set()
-        safety.NESTED_DENY = set()
+        safety = new_safety()
         data = minimal(
             protected=["Windows", "Program Files"],
             nestedAllow=["Downloads"],
@@ -117,49 +149,85 @@ class TestApplyTo(unittest.TestCase):
         self.assertEqual(safety.NESTED_DENY, {"node_modules"})
         self.assertEqual(len(changed), 3)
 
-    def test_applies_decisions(self):
-        dec = FakeMod()
-        dec.CROSS_RULES = []
-        dec.NEW_CATEGORIES = {}
-        dec.CATEGORY_NODE_NAMES = set()
+    def test_v2_categories_to_cross_rules(self):
+        dec = new_decisions()
         data = minimal(
-            crossRules=[{"keys": ["番剧"], "to": ["影视"]}],
-            newCategories={"电子书": {"parent": "文档", "keys": ["epub"]}},
-            categoryNodes=["影视"],
+            categories={
+                "video": {"keys": ["电影", "影片"], "suggest": ["影视"]},
+                "game": {"keys": ["游戏"], "suggest": ["游戏"]},
+            },
+            mapping={"video": "我的影视区", "game": None},
         )
         rules.apply_to(data, decisions_mod=dec)
+        self.assertEqual(len(dec.CROSS_RULES), 2)
+        # 有映射的用映射名
+        video = [r for r in dec.CROSS_RULES if "电影" in r["keys"]][0]
+        self.assertEqual(video["to"], ["我的影视区"])
+        # 没映射的退回 suggest
+        game = [r for r in dec.CROSS_RULES if "游戏" in r["keys"]][0]
+        self.assertEqual(game["to"], ["游戏"])
+
+    def test_v2_mapping_feeds_category_nodes(self):
+        dec = new_decisions()
+        data = minimal(mapping={"video": "影视"})
+        rules.apply_to(data, decisions_mod=dec)
+        self.assertIn("影视", dec.CATEGORY_NODE_NAMES)
+
+    def test_v1_backward_compatible(self):
+        dec = new_decisions()
+        old = {
+            "version": 1,
+            "minPacktidy": "0.1.0",
+            "protected": [],
+            "crossRules": [{"keys": ["番剧"], "to": ["影视"]}],
+            "newCategories": {"电子书": {"parent": "文档", "keys": ["epub"]}},
+            "categoryNodes": ["影视"],
+        }
+        rules.apply_to(old, decisions_mod=dec)
         self.assertEqual(len(dec.CROSS_RULES), 1)
         self.assertEqual(dec.NEW_CATEGORIES["电子书"]["parent"], "文档")
         self.assertEqual(dec.CATEGORY_NODE_NAMES, {"影视"})
 
     def test_lowercases_names(self):
-        safety = FakeMod()
-        safety.PROTECTED_NAMES = set()
-        safety.NESTED_ALLOW = set()
-        safety.NESTED_DENY = set()
+        safety = new_safety()
         rules.apply_to(minimal(protected=["WiNdOwS"]), safety_mod=safety)
         self.assertIn("windows", safety.PROTECTED_NAMES)
 
 
 class TestDefaultPack(unittest.TestCase):
-    """默认规则包本身要合法。"""
+    """默认规则包本身要合法，且不含任何具体分类名。"""
 
-    def test_default_pack_valid(self):
+    @classmethod
+    def setUpClass(cls):
         p = HERE.parent / "rules" / "default.json"
         if not p.is_file():
-            self.skipTest("没有默认规则包")
-        data = json.loads(p.read_text(encoding="utf-8-sig"))
-        ok, problems = rules.validate(data)
+            raise unittest.SkipTest("没有默认规则包")
+        cls.data = json.loads(p.read_text(encoding="utf-8-sig"))
+
+    def test_valid(self):
+        ok, problems = rules.validate(self.data)
         self.assertTrue(ok, problems)
 
-    def test_default_pack_has_core_fields(self):
-        p = HERE.parent / "rules" / "default.json"
-        if not p.is_file():
-            self.skipTest("没有默认规则包")
-        data = json.loads(p.read_text(encoding="utf-8-sig"))
-        for field in ("protected", "nestedAllow", "nestedDeny", "crossRules"):
-            self.assertIn(field, data)
-            self.assertTrue(len(data[field]) > 0, f"{field} 不能为空")
+    def test_has_core_sections(self):
+        for field in ("protected", "nestedAllow", "nestedDeny", "categories"):
+            self.assertIn(field, self.data)
+            self.assertTrue(len(self.data[field]) > 0, f"{field} 不能为空")
+
+    def test_mapping_all_unset(self):
+        """默认规则包不预设任何本地目录名。"""
+        mapping = self.data.get("mapping", {})
+        for k, v in mapping.items():
+            if k.startswith("_"):
+                continue
+            self.assertIsNone(
+                v, f"mapping.{k} 应为 null——默认包不该指定具体目录名")
+
+    def test_every_category_has_keys(self):
+        for name, info in self.data["categories"].items():
+            if name.startswith("_"):
+                continue
+            self.assertIn("keys", info, f"{name} 缺 keys")
+            self.assertTrue(len(info["keys"]) > 0, f"{name} 的 keys 为空")
 
 
 if __name__ == "__main__":

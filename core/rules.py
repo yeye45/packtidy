@@ -27,8 +27,10 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_RULES = HERE.parent / "rules" / "default.json"
 CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "packtidy" / "rules"
 
-REQUIRED = {"version", "minPacktidy", "protected", "crossRules"}
-OPTIONAL = {"nestedAllow", "nestedDeny", "newCategories", "categoryNodes", "updated", "changelog"}
+REQUIRED = {"version", "minPacktidy", "protected", "categories"}
+OPTIONAL = {"nestedAllow", "nestedDeny", "mapping", "updated", "changelog"}
+# v1 字段（向后兼容）
+LEGACY = {"crossRules", "newCategories", "categoryNodes"}
 LIST_FIELDS = {"protected", "nestedAllow", "nestedDeny", "categoryNodes"}
 DICT_FIELDS = {"newCategories"}
 
@@ -44,6 +46,7 @@ def validate(data):
     列表里可能含非阻断的警告（如未知字段），调用方按 ok 决定是否继续。
     """
     problems = []
+    warnings = []
 
     if not isinstance(data, dict):
         return False, ["顶层必须是对象"]
@@ -67,32 +70,36 @@ def validate(data):
         v = data["protected"]
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
             problems.append("protected 必须是字符串数组")
-    if "crossRules" in data:
-        v = data["crossRules"]
-        if not isinstance(v, list):
-            problems.append("crossRules 必须是数组")
-        else:
-            for i, r in enumerate(v):
-                if not isinstance(r, dict):
-                    problems.append(f"crossRules[{i}] 必须是对象")
-                    continue
-                if "keys" not in r or "to" not in r:
-                    problems.append(f"crossRules[{i}] 缺 keys 或 to")
-                elif not isinstance(r["keys"], list) or not isinstance(r["to"], list):
-                    problems.append(f"crossRules[{i}] 的 keys/to 必须是数组")
-    if "newCategories" in data:
-        v = data["newCategories"]
+    if "categories" in data:
+        v = data["categories"]
         if not isinstance(v, dict):
-            problems.append("newCategories 必须是对象")
+            problems.append("categories 必须是对象")
         else:
             for name, info in v.items():
-                if not isinstance(info, dict):
-                    problems.append(f"newCategories.{name} 必须是对象")
+                if name.startswith("_"):
                     continue
-                if "keys" not in info:
-                    problems.append(f"newCategories.{name} 缺 keys")
-                if "parent" not in info:
-                    problems.append(f"newCategories.{name} 缺 parent")
+                if not isinstance(info, dict):
+                    problems.append(f"categories.{name} 必须是对象")
+                    continue
+                if "keys" not in info or not isinstance(info["keys"], list):
+                    problems.append(f"categories.{name} 需要 keys 数组")
+                if "suggest" in info and not isinstance(info["suggest"], list):
+                    problems.append(f"categories.{name}.suggest 必须是数组")
+
+    if "mapping" in data:
+        v = data["mapping"]
+        if not isinstance(v, dict):
+            problems.append("mapping 必须是对象")
+        else:
+            cats = set(data.get("categories", {})) - {
+                k for k in data.get("categories", {}) if k.startswith("_")}
+            for name, target in v.items():
+                if name.startswith("_"):
+                    continue
+                if name not in cats:
+                    warnings.append(f"mapping.{name} 对应的类别不存在（忽略）")
+                if target is not None and not isinstance(target, str):
+                    problems.append(f"mapping.{name} 必须是字符串或 null")
 
     return (not problems), problems + warnings
 
@@ -130,23 +137,52 @@ def apply_to(data, safety_mod=None, decisions_mod=None):
                 changed.append(f"safety.{const}")
 
     if decisions_mod is not None:
+        # v2：categories + mapping
+        if "categories" in data:
+            cats = data["categories"]
+            mapping = data.get("mapping") or {}
+
+            # 转成 decisions 用的 CROSS_RULES：keys → [目标目录名]
+            cross = []
+            for name, info in cats.items():
+                if name.startswith("_"):
+                    continue
+                keys = info.get("keys") or []
+                target = mapping.get(name)
+                if target is None:
+                    # 没映射时退回 suggest 里的候选名
+                    target_list = info.get("suggest") or []
+                else:
+                    target_list = [target]
+                if keys and target_list:
+                    cross.append({"keys": keys, "to": target_list})
+            if cross:
+                decisions_mod.CROSS_RULES = cross
+                changed.append(f"decisions.CROSS_RULES(v2, {len(cross)}条)")
+
+            # 有映射名字的当作 categoryNodes
+            nodes = {m for m in mapping.values() if isinstance(m, str)}
+            if nodes:
+                decisions_mod.CATEGORY_NODE_NAMES = nodes
+                changed.append("decisions.CATEGORY_NODE_NAMES(v2)")
+
+        # v1 兼容
         if "crossRules" in data:
-            rules = []
-            for r in data["crossRules"]:
-                rules.append({"keys": r["keys"], "to": r["to"]})
+            rules = [{"keys": r["keys"], "to": r["to"]}
+                     for r in data["crossRules"]]
             decisions_mod.CROSS_RULES = rules
-            changed.append("decisions.CROSS_RULES")
+            changed.append("decisions.CROSS_RULES(v1)")
 
         if "newCategories" in data:
             decisions_mod.NEW_CATEGORIES = {
                 name: {"parent": info.get("parent"), "keys": info["keys"]}
                 for name, info in data["newCategories"].items()
             }
-            changed.append("decisions.NEW_CATEGORIES")
+            changed.append("decisions.NEW_CATEGORIES(v1)")
 
         if "categoryNodes" in data:
             decisions_mod.CATEGORY_NODE_NAMES = set(data["categoryNodes"])
-            changed.append("decisions.CATEGORY_NODE_NAMES")
+            changed.append("decisions.CATEGORY_NODE_NAMES(v1)")
 
     return changed
 
