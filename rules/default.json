@@ -11,135 +11,385 @@
     "categories": "语义类别定义。每类含关键词与建议的目录名（供本地映射参考）",
     "mapping": "类别 → 本地目录名。留空表示由 policy.json 填写"
   },
-
-  "version": 2,
+  "version": 3,
   "minPacktidy": "0.1.0",
   "updated": "2026-11-09",
-
   "protected": [
-    "steamlibrary", "steamapps", "games", "my games",
-    "epic games", "battle.net", "shaderpacks",
-    "appdata", "program files", "program files (x86)",
-    "programdata", "windows", "system32", "syswow64",
-    "system volume information", "$recycle.bin",
-    ".git", "node_modules", ".venv", "site-packages",
+    "steamlibrary",
+    "steamapps",
+    "games",
+    "my games",
+    "epic games",
+    "battle.net",
+    "shaderpacks",
+    "appdata",
+    "program files",
+    "program files (x86)",
+    "programdata",
+    "windows",
+    "system32",
+    "syswow64",
+    "system volume information",
+    "$recycle.bin",
+    ".git",
+    "node_modules",
+    ".venv",
+    "site-packages",
     "_organize"
   ],
-
   "nestedAllow": [
-    "downloads", "download", "桌面", "desktop",
-    "documents", "文档", "temp", "tmp", "缓存", "cache",
-    "捕获", "captures", "screenshots", "screenshot",
-    "截图", "录屏", "recordings", "output", "outputs", "导出",
-    "_待删除", "_重复待确认", "_未归类"
+    "downloads",
+    "download",
+    "桌面",
+    "desktop",
+    "documents",
+    "文档",
+    "temp",
+    "tmp",
+    "缓存",
+    "cache",
+    "捕获",
+    "captures",
+    "screenshots",
+    "screenshot",
+    "截图",
+    "录屏",
+    "recordings",
+    "output",
+    "outputs",
+    "导出",
+    "_待删除",
+    "_重复待确认",
+    "_未归类"
   ],
-
   "nestedDeny": [
-    "node_modules", ".git", "site-packages", "venv", ".venv",
-    "steamapps", "appdata", "windows", "system32", "syswow64",
-    "program files", "program files (x86)", "programdata",
-    "$recycle.bin", "system volume information"
+    "node_modules",
+    ".git",
+    "site-packages",
+    "venv",
+    ".venv",
+    "steamapps",
+    "appdata",
+    "windows",
+    "system32",
+    "syswow64",
+    "program files",
+    "program files (x86)",
+    "programdata",
+    "$recycle.bin",
+    "system volume information"
   ],
-
   "categories": {
     "_comment": "每个类别：keys 是识别关键词，suggest 是常见目录名（供参考，可被本地覆盖）",
-
     "video_series": {
       "label": "剧集动画",
-      "keys": ["番剧", "动画", "动漫", "TV版", "第一季", "第二季", "OVA"],
-      "suggest": ["动画", "番剧", "Anime"]
+      "keys": [
+        "番剧",
+        "动画",
+        "动漫",
+        "TV版",
+        "第一季",
+        "第二季",
+        "OVA"
+      ],
+      "suggest": [
+        "动画",
+        "番剧",
+        "Anime"
+      ]
     },
     "video_movie": {
       "label": "电影影视",
-      "keys": ["电影", "影片", "剧集", "短剧", "纪录片"],
-      "suggest": ["影视", "电影", "Movies"]
+      "keys": [
+        "电影",
+        "影片",
+        "剧集",
+        "短剧",
+        "纪录片"
+      ],
+      "suggest": [
+        "影视",
+        "电影",
+        "Movies"
+      ]
     },
     "video_clip": {
       "label": "短视频剪辑",
-      "keys": ["MV", "录屏", "鬼畜", "整活", "搬运", "混剪"],
-      "suggest": ["娱乐视频", "视频", "Clips"]
+      "keys": [
+        "MV",
+        "录屏",
+        "鬼畜",
+        "整活",
+        "搬运",
+        "混剪"
+      ],
+      "suggest": [
+        "娱乐视频",
+        "视频",
+        "Clips"
+      ]
     },
     "video_course": {
       "label": "课程讲座",
-      "keys": ["课程", "教程", "网课", "科普", "讲座", "公开课", "培训"],
-      "suggest": ["学习资料", "课程", "Courses"]
+      "keys": [
+        "课程",
+        "教程",
+        "网课",
+        "科普",
+        "讲座",
+        "公开课",
+        "培训"
+      ],
+      "suggest": [
+        "学习资料",
+        "课程",
+        "Courses"
+      ]
     },
-
     "adult_audio": {
       "label": "成人音声",
-      "keys": ["ASMR", "音声", "同人音声"],
-      "suggest": ["成人音声", "ASMR"]
+      "keys": [
+        "ASMR",
+        "音声",
+        "同人音声"
+      ],
+      "suggest": [
+        "成人音声",
+        "ASMR"
+      ]
     },
     "adult_game": {
       "label": "成人游戏",
-      "keys": ["galgame", "成人", "R18", "18禁", "エロ"],
-      "suggest": ["成人内容", "R18"]
+      "keys": [
+        "galgame",
+        "成人",
+        "R18",
+        "18禁",
+        "エロ"
+      ],
+      "suggest": [
+        "成人内容",
+        "R18"
+      ]
     },
     "adult_image": {
       "label": "成人图像",
-      "keys": ["同人志", "CG集", "图包"],
-      "suggest": ["成人图像", "R18"]
+      "keys": [
+        "同人志",
+        "CG集",
+        "图包",
+        "画集"
+      ],
+      "suggest": [
+        "成人图像",
+        "R18"
+      ]
     },
-
     "software_installer": {
       "label": "软件安装包",
-      "keys": ["安装包", "破解", "插件", "绿色版", "便携版"],
-      "suggest": ["软件安装包", "Installers"]
+      "keys": [
+        "安装包",
+        "破解",
+        "插件",
+        "绿色版",
+        "便携版"
+      ],
+      "suggest": [
+        "软件安装包",
+        "Installers"
+      ]
     },
     "system_image": {
       "label": "系统镜像",
-      "keys": ["镜像", "刷机", "装机", "驱动", "ISO", "GHO", "WIM"],
-      "suggest": ["系统", "System"]
+      "keys": [
+        "镜像",
+        "ISO",
+        "GHO",
+        "WIM",
+        "系统盘",
+        "安装版"
+      ],
+      "suggest": [
+        "系统镜像",
+        "Images"
+      ]
     },
-
     "ai_model": {
       "label": "AI 模型与工作流",
-      "keys": ["模型", "工作流", "词库", "LoRA", "embedding",
-               "ComfyUI", "训练", "checkpoint", "VAE"],
-      "suggest": ["AI工具", "AI"]
+      "keys": [
+        "模型",
+        "工作流",
+        "词库",
+        "LoRA",
+        "embedding",
+        "ComfyUI",
+        "训练",
+        "checkpoint",
+        "VAE"
+      ],
+      "suggest": [
+        "AI工具",
+        "AI"
+      ]
     },
     "game": {
       "label": "游戏",
-      "keys": ["游戏", "Minecraft", "存档"],
-      "suggest": ["游戏", "Games"]
+      "keys": [
+        "游戏",
+        "Minecraft",
+        "存档"
+      ],
+      "suggest": [
+        "游戏",
+        "Games"
+      ]
     },
     "book": {
       "label": "书籍教材",
-      "keys": ["电子书", "小说", "epub", "教材", "教科书", "课本"],
-      "suggest": ["电子书", "Books"]
+      "keys": [
+        "电子书",
+        "小说",
+        "epub",
+        "教材",
+        "教科书",
+        "课本"
+      ],
+      "suggest": [
+        "电子书",
+        "Books"
+      ]
     },
     "comic": {
       "label": "漫画",
-      "keys": ["漫画", "同人志", "连载"],
-      "suggest": ["漫画", "Comics"]
+      "keys": [
+        "漫画",
+        "连载",
+        "单行本",
+        "manga"
+      ],
+      "suggest": [
+        "漫画",
+        "Comics"
+      ]
     },
     "music": {
-      "label": "音乐音源",
-      "keys": ["音源", "VOCALOID", "BGM", "歌曲", "专辑", "声库", "采样"],
-      "suggest": ["音乐", "Music", "Audio"]
+      "label": "音乐成品",
+      "keys": [
+        "BGM",
+        "歌曲",
+        "专辑",
+        "混音",
+        "翻唱",
+        "OST",
+        "原声"
+      ],
+      "suggest": [
+        "音乐",
+        "Music"
+      ]
     },
     "document": {
       "label": "个人文档",
-      "keys": ["文档", "简历", "合同", "表格", "报告"],
-      "suggest": ["文档", "Documents"]
+      "keys": [
+        "文档",
+        "简历",
+        "合同",
+        "表格",
+        "报告"
+      ],
+      "suggest": [
+        "文档",
+        "Documents"
+      ]
     },
     "code": {
       "label": "代码工程",
-      "keys": ["源码", "工程", "项目", "脚本"],
-      "suggest": ["代码", "Code"]
+      "keys": [
+        "源码",
+        "工程",
+        "项目",
+        "脚本"
+      ],
+      "suggest": [
+        "代码",
+        "Code"
+      ]
     },
     "backup": {
       "label": "备份",
-      "keys": ["备份", "还原点", "快照"],
-      "suggest": ["备份", "Backup"]
+      "keys": [
+        "备份",
+        "还原点",
+        "快照"
+      ],
+      "suggest": [
+        "备份",
+        "Backup"
+      ]
     },
     "design_asset": {
       "label": "设计素材",
-      "keys": ["素材", "笔刷", "预设", "字体", "模板"],
-      "suggest": ["素材", "Assets"]
+      "keys": [
+        "素材",
+        "笔刷",
+        "预设",
+        "brush",
+        "preset"
+      ],
+      "suggest": [
+        "素材",
+        "Assets"
+      ]
+    },
+    "voice_synth": {
+      "label": "歌声合成声库与工具",
+      "keys": [
+        "VOCALOID",
+        "声库",
+        "音源",
+        "歌声合成",
+        "UTAU",
+        "CeVIO",
+        "Synthesizer V",
+        "术力口",
+        "ボカロ"
+      ],
+      "suggest": [
+        "歌声合成",
+        "VoiceSynth"
+      ]
+    },
+    "install_tool": {
+      "label": "装机与刷机工具",
+      "keys": [
+        "刷机",
+        "装机",
+        "驱动",
+        "PE",
+        "TWRP",
+        "ROM",
+        "救砖"
+      ],
+      "suggest": [
+        "装机工具",
+        "Tools"
+      ]
+    },
+    "template_font": {
+      "label": "模板与字体",
+      "keys": [
+        "模板",
+        "字体",
+        "字库",
+        "template",
+        "font"
+      ],
+      "suggest": [
+        "模板",
+        "Templates"
+      ]
     }
   },
-
   "mapping": {
     "_comment": "类别 → 本地目录名。留空表示由用户的 policy.json 决定，packtidy 只提出建议",
     "video_series": null,
@@ -159,12 +409,26 @@
     "document": null,
     "code": null,
     "backup": null,
-    "design_asset": null
+    "design_asset": null,
+    "voice_synth": null,
+    "install_tool": null,
+    "template_font": null
   },
-
   "_changelog": [
-    {"version": 2, "date": "2026-11-09",
-     "note": "改为语义类别 + 本地映射。不再内置任何具体目录名——原来的私人库名、单字简称等属于个人命名风格，不该写进通用规则。"},
-    {"version": 1, "date": "2026-11-09", "note": "初始格式。"}
+    {
+      "version": 3,
+      "date": "2026-11-09",
+      "note": "修正工具与成品混淆：music 拆出 voice_synth（声库是采样库，不是成品音乐）；system_image 拆出 install_tool；design_asset 拆出 template_font；comic 与 adult_image 的同人志归属去重。"
+    },
+    {
+      "version": 2,
+      "date": "2026-11-09",
+      "note": "改为语义类别 + 本地映射。不再内置任何具体目录名——原来的私人库名、单字简称等属于个人命名风格，不该写进通用规则。"
+    },
+    {
+      "version": 1,
+      "date": "2026-11-09",
+      "note": "初始格式。"
+    }
   ]
 }
