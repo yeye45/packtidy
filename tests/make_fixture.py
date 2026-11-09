@@ -110,7 +110,11 @@ def main():
     probe = root / "_organize" / "probe"
     probe.mkdir(parents=True, exist_ok=True)
 
-    # 先建候选去向目录，放占位文件让"有内容"成立
+    # 候选去向目录。**不写探针**——它们不是待整理的节点，
+    # 是"可以往这里移"的目标。coverage 会因此报这几项遗漏，
+    # 那是 fixture 的预期状态，不是真遗漏。
+    #
+    # 想让 coverage 干净，就别拿 fixture 当真实盘测。
     for z in ZONES:
         p = root / z.replace("/", os.sep)
         p.mkdir(parents=True, exist_ok=True)

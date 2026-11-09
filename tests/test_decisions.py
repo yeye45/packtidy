@@ -551,5 +551,86 @@ class TestTierEnforcement(unittest.TestCase):
         os.unlink(path)
 
 
+
+
+class TestPolicyMapping(unittest.TestCase):
+    """policy.json 的 mapping 要真的生效——S0 前置确认的产物。"""
+
+    def _setup_policy(self, tmp, mapping):
+        import json
+        from pathlib import Path as _P
+        org = _P(tmp) / "_organize"
+        org.mkdir(parents=True, exist_ok=True)
+        (org / "policy.json").write_text(
+            json.dumps({"mapping": mapping}, ensure_ascii=False),
+            encoding="utf-8")
+        return tmp
+
+    def test_load_returns_mapping(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._setup_policy(d, {"video_movie": "我的影视"})
+            mp, st = D.load_policy_mapping(d)
+            self.assertEqual(mp.get("video_movie"), "我的影视")
+
+    def test_load_skips_comment_keys(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._setup_policy(d, {"_comment": "说明", "game": "游戏"})
+            mp, _ = D.load_policy_mapping(d)
+            self.assertNotIn("_comment", mp)
+            self.assertIn("game", mp)
+
+    def test_load_missing_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            mp, st = D.load_policy_mapping(d)
+            self.assertEqual(mp, {})
+
+    def test_apply_changes_cross_rules(self):
+        """mapping 应该覆盖 CROSS_RULES 的目标。"""
+        saved = [dict(r) for r in D.CROSS_RULES]
+        saved_nodes = set(D.CATEGORY_NODE_NAMES)
+        try:
+            D.CROSS_RULES = [
+                {"keys": ["电影", "影片"], "to": ["影视"]},
+                {"keys": ["游戏"], "to": ["游戏"]},
+            ]
+            D.CATEGORY_NODE_NAMES = set()
+            n = D.apply_policy_mapping({"video_movie": "我的影视区"})
+            self.assertGreater(n, 0)
+            rule = [r for r in D.CROSS_RULES if "电影" in r["keys"]][0]
+            self.assertEqual(rule["to"], ["我的影视区"])
+        finally:
+            D.CROSS_RULES = saved
+            D.CATEGORY_NODE_NAMES = saved_nodes
+
+    def test_apply_adds_to_category_nodes(self):
+        saved = [dict(r) for r in D.CROSS_RULES]
+        saved_nodes = set(D.CATEGORY_NODE_NAMES)
+        try:
+            D.CROSS_RULES = []
+            D.CATEGORY_NODE_NAMES = set()
+            D.apply_policy_mapping({"game": "我的游戏区"})
+            self.assertIn("我的游戏区", D.CATEGORY_NODE_NAMES)
+        finally:
+            D.CROSS_RULES = saved
+            D.CATEGORY_NODE_NAMES = saved_nodes
+
+    def test_apply_empty_is_noop(self):
+        n = D.apply_policy_mapping({})
+        self.assertEqual(n, 0)
+
+    def test_category_keys_covers_default_pack(self):
+        """CATEGORY_KEYS 要覆盖规则包里所有类别。"""
+        import json
+        from pathlib import Path as _P
+        pack = _P(__file__).resolve().parent.parent / "rules" / "default.json"
+        if not pack.is_file():
+            self.skipTest("没有规则包")
+        data = json.loads(pack.read_text(encoding="utf-8-sig"))
+        cats = {k for k in data.get("categories", {})
+                if not k.startswith("_")}
+        missing = cats - set(D.CATEGORY_KEYS)
+        self.assertFalse(missing, f"CATEGORY_KEYS 缺: {missing}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

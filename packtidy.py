@@ -217,9 +217,10 @@ def cmd_setup(args):
     su = _load("setup", "setup.py")
     argv = [args.action]
     if args.action == "apply":
-        if not args.answers:
-            sys.exit("apply 需要 --answers")
-        argv += [args.root, args.answers]
+        ans = getattr(args, "answers_pos", None) or getattr(args, "answers", None)
+        if not ans:
+            sys.exit("用法: packtidy setup apply <root> <answers.json>")
+        argv += [args.root, ans]
     else:
         argv.append(args.root)
     old = sys.argv
@@ -287,7 +288,7 @@ def main(argv=None):
     s = sub.add_parser("setup", help="整理前的一次性确认")
     s.add_argument("action", choices=("ask", "apply", "show"))
     s.add_argument("root")
-    s.add_argument("--answers")
+    s.add_argument("answers_pos", nargs="?", help="apply 时的答案文件")
     s.set_defaults(func=cmd_setup)
 
     s = sub.add_parser("decisions", help="算建议 / 生成 AI 问题 / 回填答案")

@@ -151,8 +151,9 @@ def apply_to(data, safety_mod=None, decisions_mod=None):
                 target = mapping.get(name)
                 if target is None:
                     # 没映射时退回 suggest 里的候选名
-                    target_list = info.get("suggest") or []
+                    target_list = list(info.get("suggest") or [])
                 else:
+                    # 有映射时只用它——不要混进 suggest 的候选名
                     target_list = [target]
                 if keys and target_list:
                     cross.append({"keys": keys, "to": target_list})

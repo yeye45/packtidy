@@ -611,7 +611,7 @@ python packtidy.py undo --journal journal.tsv --run-id run-xxx
 | 情况 | 行为 |
 |---|---|
 | 目标不在 | 跳过并记录，不报错 |
-| 原位置已有同名 | **不覆盖**，记 conflict，留给人 |
+| 原位置已有同名 | **不覆盖**，自动改名为 `原名_1.ext`（`_2`、`_3` 递增） |
 | rename 撤销时原名被占 | 改用 `<原名>_undone<扩展名>` |
 | mkdir 撤销时目录非空 | 保留，记 skip |
 

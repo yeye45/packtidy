@@ -819,6 +819,98 @@ def verification_tier(group, suggest, shape=None, evidence=None):
     return "verify"
 
 
+def load_policy_mapping(root):
+    """读 policy.json 里的 mapping 和 setup，覆盖规则包的空映射。
+
+    规则包的 mapping 默认全 null——那是通用模板。
+    具体的"类型 → 你盘上叫什么"由 policy.json 决定，
+    也就是 S0 前置确认的产物。
+
+    没有 policy.json 时返回空 dict，不报错。
+    """
+    import json as _json
+    from pathlib import Path as _P
+
+    p = _P(root) / "_organize" / "policy.json"
+    if not p.is_file():
+        return {}, {}
+
+    try:
+        data = _json.loads(p.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}, {}
+
+    mapping = {
+        k: v for k, v in (data.get("mapping") or {}).items()
+        if not k.startswith("_") and isinstance(v, str) and v.strip()
+    }
+    setup = data.get("setup") or {}
+    return mapping, setup
+
+
+# 语义类别 id → 该类别包含哪些关键词（与 rules/default.json 的 categories 对应）
+CATEGORY_KEYS = {
+    "video_series": ["番剧", "动画", "动漫", "TV版", "OVA"],
+    "video_movie": ["电影", "影片", "剧集", "短剧", "纪录片"],
+    "video_clip": ["MV", "录屏", "鬼畜", "整活", "搬运", "混剪"],
+    "video_course": ["课程", "教程", "网课", "科普", "讲座", "公开课"],
+    "adult_audio": ["ASMR", "音声", "同人音声"],
+    "adult_game": ["galgame", "成人", "R18", "18禁"],
+    "adult_image": ["同人志", "CG集", "图包", "画集"],
+    "software_installer": ["安装包", "破解", "插件", "绿色版", "便携版"],
+    "system_image": ["镜像", "ISO", "GHO", "WIM"],
+    "install_tool": ["刷机", "装机", "驱动", "PE", "TWRP", "ROM", "救砖"],
+    "ai_model": ["模型", "工作流", "词库", "LoRA", "embedding", "ComfyUI"],
+    "game": ["游戏", "Minecraft", "存档"],
+    "book": ["电子书", "小说", "epub", "教材", "教科书"],
+    "comic": ["漫画", "连载", "单行本"],
+    "music": ["BGM", "歌曲", "专辑", "混音", "翻唱", "OST"],
+    "voice_synth": ["VOCALOID", "声库", "音源", "歌声合成", "UTAU", "CeVIO"],
+    "document": ["文档", "简历", "合同", "表格", "报告"],
+    "code": ["源码", "工程", "脚本"],
+    "backup": ["备份", "还原点", "快照"],
+    "design_asset": ["素材", "笔刷", "预设"],
+    "template_font": ["模板", "字体", "字库"],
+}
+
+
+def apply_policy_mapping(mapping):
+    """把 policy 的 mapping 应用到模块状态。
+
+    mapping 的键是语义类别 id（video_movie / voice_synth 等），
+    值是该类别在用户盘上实际的目录名。
+
+    做法：按 CATEGORY_KEYS 找到对应关键词，把 CROSS_RULES 里
+    命中这些关键词的规则的 to 改成 policy 给的名字。
+    """
+    if not mapping:
+        return 0
+
+    changed = 0
+    for cat, name in mapping.items():
+        keys = CATEGORY_KEYS.get(cat)
+        if not keys:
+            continue
+        # 找命中这些关键词的规则，改它的 to
+        for rule in CROSS_RULES:
+            rk = rule.get("keys") or []
+            if any(k in keys for k in rk):
+                # 覆盖，不是追加——mapping 是权威
+                rule["to"] = [name]
+                changed += 1
+                break
+        else:
+            # 规则里没有这个类别 → 新建一条
+            CROSS_RULES.append({"keys": list(keys), "to": [name]})
+            changed += 1
+
+    # 有具体名字的都是分类容器
+    nodes = {v for v in mapping.values() if v}
+    if nodes:
+        CATEGORY_NODE_NAMES.update(nodes)
+
+    return changed
+
 def _question_tier(suggest):
     """这一组该走哪一级验证。"""
     return verification_tier(None, suggest)
@@ -980,6 +1072,20 @@ def apply_answers(nodes, answers_path):
 
 def main():
     _boot_rules()
+
+    # 读 policy.json 的 mapping（S0 前置确认的产物）
+    # 规则包的 mapping 是通用模板（全 null），具体的名字在这里
+    if "--root" in sys.argv:
+        try:
+            _r = sys.argv[sys.argv.index("--root") + 1]
+        except IndexError:
+            _r = None
+        if _r:
+            _mapping, _setup = load_policy_mapping(_r)
+            if _mapping:
+                n = apply_policy_mapping(_mapping)
+                print(f"policy.json 映射已生效: {n} 条规则, "
+                      f"{len(_mapping)} 个类别", file=sys.stderr)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--root', required=True)
     ap.add_argument('--probe')
