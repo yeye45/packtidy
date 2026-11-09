@@ -43,6 +43,10 @@ RELATION_TEXT = {
 # 这里留空——写死的映射必然会带出某个人的分类体系。
 CROSS_RULES = []
 
+# 本身就是分类容器的顶层区名字。空集表示"没有任何一个算"——
+# 具体名单由规则包的 categoryNodes 提供，不写死在代码里。
+CATEGORY_NODE_NAMES = set()
+
 
 # ═══════════════════════════════════════════════════════════
 # 新建分类白名单：只有这些才值得新建，而且指定归属父级
@@ -216,70 +220,350 @@ def looks_like_category(name):
     return any(g in low for g in generic)
 
 
-def suggest_group(group_name, node_name, zones, node_path=None):
+# ═══════════════════════════════════════════════════════════
+# 内容形态检测：先看"里面是什么"，再看"叫什么名字"
+#
+# 只看名字必然出错——"音源"可能是采样库也可能是成品曲，
+# "镜像"可能是系统盘也可能是刷机包。名字是线索，内容才是证据。
+# ═══════════════════════════════════════════════════════════
+
+# 安装包特征：这些扩展名说明是"可分发的软件"
+INSTALLER_EXT = {".exe", ".msi", ".dmg", ".pkg", ".appx", ".msix",
+                 ".deb", ".rpm", ".apk"}
+# 归档特征
+ARCHIVE_EXT = {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz",
+               ".iso", ".wim", ".gho", ".esd"}
+# 媒体成品特征
+MEDIA_EXT = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm",
+             ".mp3", ".flac", ".wav", ".aac", ".m4a", ".ogg"}
+# 图像特征
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+             ".psd", ".tif", ".tiff", ".svg"}
+# 代码特征
+CODE_EXT = {".py", ".js", ".ts", ".java", ".c", ".cpp", ".cs", ".go",
+            ".rs", ".php", ".rb", ".swift", ".kt", ".lua"}
+# 文档特征
+DOC_EXT = {".doc", ".docx", ".pdf", ".txt", ".md", ".xls", ".xlsx",
+           ".ppt", ".pptx", ".odt", ".csv", ".epub", ".mobi"}
+
+
+def content_shape(path, max_files=2000):
+    """看一个目录里装的是什么形态的文件。
+
+    只统计扩展名分布，不读内容。成本低，但足以区分
+    "安装包集合"和"成品媒体"这种关键差别。
+    """
+    import os as _os
+    from collections import Counter
+
+    ext_count = Counter()
+    total = 0
+    try:
+        for dp, dn, fn in _os.walk(path):
+            for f in fn:
+                e = _os.path.splitext(f)[1].lower()
+                ext_count[e] += 1
+                total += 1
+                if total >= max_files:
+                    break
+            if total >= max_files:
+                break
+    except OSError:
+        return None
+
+    if not total:
+        return {"total": 0, "dominant": None, "kind": "empty"}
+
+    top_ext, top_n = ext_count.most_common(1)[0]
+    ratio = top_n / total
+
+    def fam(exts):
+        return sum(ext_count[e] for e in exts) / total
+
+    shares = {
+        "installer": fam(INSTALLER_EXT),
+        "archive": fam(ARCHIVE_EXT),
+        "media": fam(MEDIA_EXT),
+        "image": fam(IMAGE_EXT),
+        "code": fam(CODE_EXT),
+        "doc": fam(DOC_EXT),
+    }
+    best = max(shares, key=shares.get)
+
+    kind = "mixed"
+    if shares["installer"] >= 0.5:
+        kind = "installer"      # 主要是可执行安装体
+    elif shares["media"] >= 0.6:
+        kind = "media"          # 主要是音视频成品
+    elif shares["image"] >= 0.6:
+        kind = "image"          # 主要是图像
+    elif shares["code"] >= 0.5:
+        kind = "code"           # 主要是源码
+    elif shares["archive"] >= 0.5:
+        kind = "archive"        # 主要是压缩包
+    elif shares["doc"] >= 0.5:
+        kind = "document"       # 主要是文档
+
+    return {
+        "total": total,
+        "dominant": top_ext,
+        "ratio": round(ratio, 2),
+        "shares": {k: round(v, 2) for k, v in shares.items() if v > 0},
+        "kind": kind,
+    }
+
+
+# ═══════════════════════════════════════════════════════════
+# 新类别发现：规则包不可能穷举所有类型
+#
+# 遇到匹配不上的组时，不该直接放弃（fallback 到"保持原位"）。
+# 而是看这批东西有没有共同特征，能不能提出候选类别。
+#
+# 判据（与最小单元规则一致）：
+#   ≥2 个组共享同一特征  → 值得建类
+#   只 1 个组           → 不建，标 uncertain
+# ═══════════════════════════════════════════════════════════
+
+# 从组名里提取"类别词根"的常见后缀（去掉这些后剩下的就是名词）
+_GENERIC_SUFFIX = [
+    "合集", "集合", "打包", "整包", "系列", "文件", "目录", "资源",
+    "资料", "内容", "相关", "备份", "存档",
+]
+
+
+def name_stem(group_name):
+    """从组名提取可能的类别词根。
+
+    规则：去掉括号、去掉通用后缀、去掉版本号，
+    但**保留"X 与 Y"里的主词**，不按空格硬切。
+
+    "VOCALOID 编辑器与声库" → "VOCALOID"
+    "编程课程合集"          → "编程课程"
+    "4K 壁纸打包"           → "4K 壁纸"
+    """
+    import re as _re
+
+    s = group_name.strip()
+    # 去括号内容
+    s = _re.sub(r"[（(【\[].*?[)）】\]]", "", s)
+
+    # 先按"与 / 和 / 及"切成主次，取主词
+    for sep in ("与", "和", "及", "/", "、"):
+        if sep in s:
+            head = s.split(sep)[0].strip()
+            if len(head) >= 2:
+                s = head
+                break
+
+    # 去通用后缀（可能连续出现）
+    changed = True
+    while changed:
+        changed = False
+        for suf in _GENERIC_SUFFIX:
+            if s.endswith(suf) and len(s) > len(suf):
+                s = s[: -len(suf)].strip()
+                changed = True
+
+    # 去尾部的版本/日期/编号
+    s = _re.sub(r"[\s\-_]*v?[\d\.]+[a-zA-Z]?$", "", s, flags=_re.I).strip()
+    # 去尾部标点
+    s = s.strip(" \t-_·,，")
+
+    # 词根至少要有一个汉字或 2 个字母
+    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in s)
+    if not has_cjk and len(s) < 2:
+        return ""
+    return s
+
+
+def propose_new_categories(unmatched, min_groups=2):
+    """从匹配不上的组里找新类别候选。
+
+    两种聚类依据，任一成立就提议：
+      ① 词根相同     "VOCALOID 声库" / "VOCALOID 编辑器" → 词根都是 VOCALOID
+      ② 形态相同     "声库A" / "声库B" 都装 exe，形态一致且数量够
+
+    只 1 组的不提议——单个孤件不足以证明"这是一类东西"。
+
+    unmatched: [(组名, 内容形态)] 的列表
+    返回: {候选名: {count, kinds, members, basis}}
+    """
+    from collections import defaultdict
+
+    # ① 按词根聚
+    by_stem = defaultdict(lambda: {"count": 0, "kinds": set(), "members": []})
+    for name, kind in unmatched:
+        stem = name_stem(name)
+        if not stem or len(stem) < 2:
+            continue
+        if stem.isdigit():
+            continue
+        b = by_stem[stem]
+        b["count"] += 1
+        if kind:
+            b["kinds"].add(kind)
+        b["members"].append(name)
+
+    out = {}
+    for stem, info in by_stem.items():
+        if info["count"] >= min_groups:
+            out[stem] = {
+                "count": info["count"],
+                "kinds": sorted(info["kinds"]),
+                "members": info["members"][:10],
+                "basis": "词根相同",
+            }
+
+    # ② 若词根聚类没结果，退而按"形态 + 同类词"聚
+    if not out:
+        by_kind = defaultdict(list)
+        for name, kind in unmatched:
+            if kind:
+                by_kind[kind].append(name)
+        for kind, names in by_kind.items():
+            if len(names) >= min_groups:
+                # 用最长公共前缀当候选名
+                common = _common_prefix(names)
+                label = common if len(common) >= 2 else f"{kind}类"
+                out[label] = {
+                    "count": len(names),
+                    "kinds": [kind],
+                    "members": names[:10],
+                    "basis": f"形态一致（{kind}）",
+                }
+
+    return out
+
+
+def _common_prefix(names):
+    """取一组名字的最长公共前缀（去标点后）。"""
+    import re as _re
+    if not names:
+        return ""
+    cleaned = [_re.sub(r"[\s\-_·,，]", "", n) for n in names]
+    if len(cleaned) < 2:
+        return cleaned[0] if cleaned else ""
+    prefix = cleaned[0]
+    for n in cleaned[1:]:
+        i = 0
+        while i < len(prefix) and i < len(n) and prefix[i] == n[i]:
+            i += 1
+        prefix = prefix[:i]
+        if len(prefix) < 2:
+            return ""
+    return prefix
+
+
+# 内容形态 → 该去哪个语义类别（优先级高于名字匹配）
+SHAPE_TO_CATEGORY = {
+    "media":     "media_pending",      # 需要按名字细分（视频/音乐）
+    "image":     "image_pending",
+    "code":      "code",
+    "document":  "book",
+    "installer": "software_installer",
+    "archive":   None,                 # 压缩包看不出内容，不判断
+    "mixed":     None,
+    "empty":     None,
+}
+
+
+def suggest_group(group_name, node_name, zones, node_path=None,
+                  group_path=None):
     """给一组算出去向建议。
 
-    返回 {mode, target, newName, newParent, reason, needsCheck}
+    判断顺序（重要）：
+      ① 结构信号   —— 组内实际装的是什么形态的文件
+      ② 归属信号   —— 组在哪个目录下、那个目录是不是分类容器
+      ③ 名字信号   —— 关键词匹配（最弱，仅作兜底）
+
+    只看名字会出错：VOCALOID 叫"音源"但装的是安装包+声库，
+    归到"音乐"就错了。先看内容形态能避免这类错误。
+
+    返回 {mode, target, newName, newParent, reason, needsCheck, evidence}
     """
-    # ① 组名包含节点名 → 本目录内部的东西，原地
+    evidence = []
+
+    # ① 内容形态：这是最硬的证据
+    shape = None
+    if group_path and os.path.isdir(group_path):
+        shape = content_shape(group_path)
+        if shape and shape["kind"] not in (None, "mixed", "empty"):
+            evidence.append(f"内容以 {shape['kind']} 为主"
+                            f"（{shape['dominant']} 占 {shape.get('ratio', 0):.0%}）")
+
+    # ② 归属：组名含目录名，或所在目录本身是分类容器 → 原地
     if node_name and node_name in group_name:
-        return {'mode': 'keep', 'reason': '组名含目录名，属本目录内部',
-                'needsCheck': False}
+        return {"mode": "keep", "reason": "组名含目录名，属本目录内部",
+                "needsCheck": False, "evidence": evidence}
 
-    # ② 节点本身已经是分类目录 → 组在它内部，无需移动
-    #   （本身就是分类容器的顶层区，其内部组无需再移动）
-    if node_path and is_category_node(node_name or ''):
-        return {'mode': 'keep',
-                'reason': '所在目录已是分类目录，组在内部无需移动',
-                'needsCheck': False}
+    if node_path and is_category_node(node_name or ""):
+        return {"mode": "keep",
+                "reason": "所在目录已是分类目录，组在内部无需移动",
+                "needsCheck": False, "evidence": evidence}
 
-    # ② 命中跨类关键词 → 找已有区
+    # ③ 名字匹配
     for rule in CROSS_RULES:
-        if any(k in group_name for k in rule['keys']):
-            for t in rule['to']:
-                # 优先匹配浅层、文件多的目录
-                cands = [z for z in zones
-                         if t.lower() in z['label'].lower()]
-                if cands:
-                    cands.sort(key=lambda z: (z['depth'], -z['files']))
-                    return {'mode': 'move', 'target': cands[0]['path'],
-                            'targetLabel': cands[0]['label'],
-                            'reason': '命中跨类关键词',
-                            'needsCheck': False}
-            # 有关键词但无对应区 → 看白名单
-            for cat, info in NEW_CATEGORIES.items():
-                if any(k in group_name for k in info['keys']):
-                    return {'mode': 'new', 'newName': cat,
-                            'newParent': info['parent'],
-                            'reason': '盘上没有对应分类，且属常见类型',
-                            'needsCheck': True}
-            # 都不匹配 → 原地，别折腾
-            return {'mode': 'keep',
-                    'reason': '有关键词但无匹配分类，保持原位',
-                    'needsCheck': False}
+        if not any(k in group_name for k in rule["keys"]):
+            continue
 
-    # ③ 默认原地
-    return {'mode': 'keep', 'reason': '无明显跨类特征', 'needsCheck': False}
+        # 名字命中了，但如果内容形态与目标类别冲突，必须标出待确认
+        conflict = False
+        if shape:
+            kind = shape["kind"]
+            targets_text = " ".join(rule["to"]).lower()
+            # 装的是安装包，却要归到"音乐/视频/图像" → 冲突
+            if kind == "installer" and any(
+                    w in targets_text for w in
+                    ("音乐", "music", "影视", "video", "图像", "image",
+                     "学习", "study", "book")):
+                conflict = True
+                evidence.append("内容主要是安装包，与名字指示的类别不符")
+            # 装的是成品媒体，却要归到"安装包/工具" → 冲突
+            if kind == "media" and any(
+                    w in targets_text for w in
+                    ("安装包", "installer", "工具", "tool", "代码", "code")):
+                conflict = True
+                evidence.append("内容是成品媒体，与名字指示的类别不符")
 
+        for t in rule["to"]:
+            cands = [z for z in zones if t.lower() in z["label"].lower()]
+            if cands:
+                cands.sort(key=lambda z: (z["depth"], -z["files"]))
+                return {"mode": "move", "target": cands[0]["path"],
+                        "targetLabel": cands[0]["label"],
+                        "reason": "命中跨类关键词",
+                        "needsCheck": conflict,
+                        "evidence": evidence}
 
-# 空集合表示"用规则包里的 categoryNodes"。
-# 不内置具体名字——那是使用者的分类体系，不该写死在代码里。
-CATEGORY_NODE_NAMES = set()
+        for cat, info in NEW_CATEGORIES.items():
+            if any(k in group_name for k in info["keys"]):
+                return {"mode": "new", "newName": cat,
+                        "newParent": info["parent"],
+                        "reason": "盘上没有对应分类",
+                        "needsCheck": True,
+                        "evidence": evidence}
 
+    # ④ 没有名字线索，但内容形态明确 → 按形态给建议
+    if shape and shape["kind"] not in (None, "mixed", "empty"):
+        hint = SHAPE_TO_CATEGORY.get(shape["kind"])
+        if hint and hint in NEW_CATEGORIES:
+            info = NEW_CATEGORIES[hint]
+            return {"mode": "new", "newName": hint,
+                    "newParent": info["parent"],
+                    "reason": f"内容形态是 {shape['kind']}，但名字无线索",
+                    "needsCheck": True,
+                    "evidence": evidence}
 
-def is_category_node(name):
-    """这个顶层区本身就是一个分类容器吗？"""
-    if name in CATEGORY_NODE_NAMES:
-        return True
-    low = name.lower()
-    return any(c.lower() == low for c in CATEGORY_NODE_NAMES)
+    return {"mode": "keep",
+            "reason": "无明显跨类特征" + ("（内容混杂）" if shape else ""),
+            "needsCheck": False, "evidence": evidence}
+
 
 
 def _boot_rules():
     """启动时加载规则包，覆盖模块级常量。
 
-    规则包是可选的——没有就沿用代码里的默认值。
-    加载失败不阻断，只在 stderr 提示。
+    规则包可选——没有就沿用代码默认值。加载失败不阻断。
     """
     try:
         import rules as rules_mod
@@ -298,6 +582,19 @@ def _boot_rules():
     except Exception as exc:
         print(f"规则包加载失败，使用内置默认: {type(exc).__name__}",
               file=sys.stderr)
+
+
+def is_category_node(name):
+    """这个顶层区本身就是一个分类容器吗？
+
+    容器内部的组不需要再移动——它们已经在正确的位置了。
+    名单由规则包的 categoryNodes 提供；这里留空表示"全都不算"，
+    宁可多问一次，也不凭猜测把容器内的组搬走。
+    """
+    if not name:
+        return False
+    low = name.casefold()
+    return any(low == c.casefold() for c in CATEGORY_NODE_NAMES)
 
 
 def main():
@@ -320,11 +617,28 @@ def main():
     need_check = 0
     new_dirs = {}
 
+    # ── 第一遍：逐组算建议，同时收集"匹配不上"的 ──
+    unmatched = []       # [(组名, 内容形态)]
+
     for n in nodes:
         for g in n["groups"]:
             s = suggest_group(g["name"], n["name"], zones, n["path"])
             g["suggest"] = s
             total += 1
+
+            # 记下既没移动也没新建、且内容形态明确的组
+            if s["mode"] == "keep" and s.get("evidence"):
+                shape = None
+                if s.get("evidence"):
+                    ev = s["evidence"][0]
+                    for k in ("installer", "media", "image", "code",
+                              "document", "archive"):
+                        if k in ev:
+                            shape = k
+                            break
+                if shape:
+                    unmatched.append((g["name"], shape))
+
             if s["mode"] == "keep":
                 keep += 1
             elif s["mode"] == "move":
@@ -339,6 +653,26 @@ def main():
             if s["needsCheck"]:
                 need_check += 1
 
+    # ── 第二遍：从未匹配上的组里发现新类别候选 ──
+    proposals = propose_new_categories(unmatched)
+    if proposals:
+        print("\n发现的候选类别（≥2 组共享同一词根）:", file=sys.stderr)
+        for stem, info in sorted(proposals.items(),
+                                 key=lambda x: -x[1]["count"]):
+            kinds = "/".join(sorted(info["kinds"])) or "?"
+            print(f"  {stem:16} {info['count']} 组  形态={kinds}",
+                  file=sys.stderr)
+            print(f"      {'、'.join(info['members'][:3])}",
+                  file=sys.stderr)
+
+    # 把候选类别写进输出，供人确认后加入规则包
+    proposal_out = {
+        stem: {"count": info["count"],
+               "kinds": sorted(info["kinds"]),
+               "members": info["members"][:10]}
+        for stem, info in proposals.items()
+    }
+
     data = {
         "root": root,
         "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -349,6 +683,7 @@ def main():
             "needCheck": need_check,
         },
         "newDirs": sorted(new_dirs.values(), key=lambda x: -x["count"]),
+        "proposedCategories": proposal_out,
     }
 
     out = Path(args.out) if args.out else Path(root) / '_organize' / 'decisions.json'
