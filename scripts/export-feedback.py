@@ -12,8 +12,8 @@
   - 输出文件留在你自己的磁盘上，是否提交、提交哪几行，完全由你决定
 
 用法：
-  python export-feedback.py --root G:/
-  python export-feedback.py --root G:/ --out G:/_organize/feedback-summary.md --max-lines 60
+  python export-feedback.py --root /mnt/disk
+  python export-feedback.py --root /mnt/disk --out G:/_organize/feedback-summary.md --max-lines 60
 """
 import argparse
 import datetime
@@ -93,11 +93,11 @@ def build_aliases(names):
 
 def redact(text, root, aliases):
     """脱敏。按"先还原转义再替换"的顺序，避免 JSON 里的 \\\\ 双反斜杠漏网。"""
-    # JSON 里路径是 C:\\Users\\eryis，正则和字符串替换都要覆盖三种形态
+    # JSON 里的路径是双反斜杠转义形态，三种写法都要覆盖
     forms = {
-        str(root),                                  # C:\Users\eryis
-        str(root).replace("\\", "/"),              # C:/Users/eryis
-        str(root).replace("\\", "\\\\"),         # C:\\Users\\eryis（JSON）
+        str(root),                                  # C:\Users\name
+        str(root).replace("\\", "/"),              # C:/Users/name
+        str(root).replace("\\", "\\\\"),         # C:\\Users\\name（JSON）
     }
     for form in sorted(forms, key=len, reverse=True):
         if form and form != ".":
@@ -133,7 +133,7 @@ def collect_artifacts(organize):
 
 def main():
     ap = argparse.ArgumentParser(description="本地生成脱敏反馈摘要（不联网、不上传）")
-    ap.add_argument("--root", required=True, help="整理任务的根目录，例如 G:/")
+    ap.add_argument("--root", required=True, help="整理任务的根目录，例如 /mnt/disk")
     ap.add_argument("--out", default=None, help="输出路径，默认 <root>/_organize/feedback-summary.md")
     ap.add_argument("--max-lines", type=int, default=40, help="每个产物最多保留的行数")
     a = ap.parse_args()

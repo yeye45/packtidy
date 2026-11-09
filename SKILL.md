@@ -134,7 +134,8 @@ python core/coverage.py /root --probe /root/_organize/probe
 
 ### ③ 名字无信息 → 必须打开
 
-零信息名：`新建文件夹` `新建文件夹 (2)` `u` `ls` `11` `Temp` `tempH` `asd` `12312313`
+零信息名：`新建文件夹` `新建文件夹 (2)` `新建文件夹 (3)`、单字母目录、
+纯数字目录、随机串
 `kjhjjk` 这类随机串。
 
 打开后三种结局：
@@ -467,8 +468,8 @@ probe/*.json 的 path 字段
 **第二类：文件命名撞车**
 
 ```
-units_TempH.json    (path = /Temp H, 376 单元)
-units_tempH.json    (path = /tempH,  4 单元)
+units_DataLib.json   (path = /Data Lib, 376 单元)
+units_datalib.json   (path = /datalib,   4 单元)
 → Windows 大小写不敏感，两个文件覆盖同一个
 → 一个节点的成果被另一个覆盖
 ```
@@ -486,8 +487,8 @@ units_tempH.json    (path = /tempH,  4 单元)
 
 ### 一次真实漏检
 
-一个 708GB / 376 单元的节点（`Temp H`）在 S3 阶段被漏掉，因为它的单元文件名带空格
-（`units_Temp H.json`），和另一个只差大小写的目录（`tempH`）撞了。
+一个 700GB 量级的节点在 S3 阶段被漏掉，因为它的单元文件名带空格
+（`units_Data Lib.json`），和另一个只差大小写的目录（`datalib`）撞了。
 
 **coverage 跑完后才发现的。** 如果只靠人记，这个 708GB 的节点会一直漏到最后。
 

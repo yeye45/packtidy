@@ -380,42 +380,8 @@ const KEY = 'fo-b5-' + DATA.root.replace(/[\\/:*?"<>|]/g,'_');
 
 let dec = {};
 
-/* 待确认项的建议值 —— 直接填好，不是空下拉 */
-const FIXED = {
-  "1": {
-    target: '__split__',
-    desc: '9 个文件横跨实验动画 / 凝胶电泳 pptx / 招生 pdf / 4 张照片 / ToDesk.exe',
-    note: '每个文件单独指定去向，见下方逐项',
-    files: [
-      {name:'1-【实验动画化】四分钟秒懂 DNA 凝胶电泳-1080P 高码率-AVC.mp4',
-       size:'32.47 MB', to:'G:\\学习资料\\生物', hint:'教学动画'},
-      {name:'凝胶电泳及其应用 (1).pptx',
-       size:'46.64 MB', to:'G:\\学习资料\\生物', hint:'课件'},
-      {name:'山东省2023年普通高等学校招生考试信息平台 - 报名信息查看.pdf',
-       size:'0.26 MB', to:'G:\\文件\\个人文档', hint:'招生信息'},
-      {name:'IMG_20221112_095511 (1).jpg',
-       size:'1.01 MB', to:'__delete__', dup:'与 IMG_20221112_095511.jpg 同哈希'},
-      {name:'IMG_20221112_095511.jpg',
-       size:'1.01 MB', to:'G:\\文件\\照片', hint:'手机拍摄'},
-      {name:'IMG_20221112_095515.jpg',
-       size:'1.16 MB', to:'G:\\文件\\照片', hint:'手机拍摄'},
-      {name:'微信图片_20221106125216.jpg',
-       size:'0.12 MB', to:'G:\\文件\\照片\\微信', hint:'微信保存'},
-      {name:'微信图片_202211061252161.jpg',
-       size:'0.12 MB', to:'G:\\文件\\照片\\微信', hint:'微信保存（哈希不同）'},
-      {name:'ToDesk.exe',
-       size:'1.48 MB', to:'G:\\文件\\软件安装包', hint:'远程工具'}
-    ]
-  },
-  "saves": {
-    target: '__merge__',
-    desc: '6 个世界存档，与 Minecraft\\saves 有 4 个完全相同、2 个不同版本',
-    note: '建议合并：补进 Minecraft\\saves，同名的不覆盖'
-  }
-};
-
-/* 文件级分配状态：path -&gt; {文件名: 目标} */
-let fileDec = {};
+/* 待确认项的建议值由 generate 注入，不写死在模板里 */
+const FIXED = DATA.fixed || {};
 
 function esc(s){
   return String(s ?? '').replace(/[&<>"]/g,

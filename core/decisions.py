@@ -272,11 +272,9 @@ def suggest_group(group_name, node_name, zones, node_path=None):
     return {'mode': 'keep', 'reason': '无明显跨类特征', 'needsCheck': False}
 
 
-CATEGORY_NODE_NAMES = {
-    'AI工具', 'H_Library', '番', 'VOCALOID', '影视', '游戏',
-    '系统镜像', '软件安装包', '文档', 'Adobe', 'PPT模板',
-    'backup', 'Media', 'Doujin', 'Documents', 'Software',
-}
+# 空集合表示"用规则包里的 categoryNodes"。
+# 不内置具体名字——那是使用者的分类体系，不该写死在代码里。
+CATEGORY_NODE_NAMES = set()
 
 
 def is_category_node(name):

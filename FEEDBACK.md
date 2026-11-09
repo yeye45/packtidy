@@ -32,7 +32,7 @@
 愿意的话可以先跑（在仓库根目录）：
 
 ```
-python scripts/export-feedback.py --root G:/
+python scripts/export-feedback.py --root /mnt/disk
 ```
 
 它会在 `<root>/_organize/feedback-summary.md` 生成一份摘要：
@@ -47,7 +47,7 @@ python scripts/export-feedback.py --root G:/
 
 **贴结构，不贴名字。** 把真实路径和文件名换成占位符：
 
-- `G:\毕业设计\测序数据\2023\...` → `<root>/A/`
+- `/mnt/disk/项目名/数据/2023/...` → `<root>/dir-A/`
 - `论文终版_v3.docx` → `unit-01`
 
 不需要提供：完整 `_organize/` 日志、真实文件名、目录全貌、任何个人信息或凭据。
