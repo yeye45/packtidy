@@ -540,15 +540,16 @@ def _lookup_hint(group_name, shape=None):
 
     kind = (shape or {}).get("kind")
     if kind in ("media", "image"):
-        return {"source": "vndb", "key": group_name,
-                "note": "可能是视觉小说/游戏作品，查 VNDB 拿标签与成人分级",
-                "command": f'python core/lookup.py vndb "{group_name}"'}
+        return {"hint": "可能是作品，建议查 VNDB / Steam / Bangumi",
+                "command": f'python core/lookup.py suggest "{group_name}" --shape media'}
     if kind == "installer":
-        return {"source": "software",
-                "note": "内容是安装包，可能是软件或工具，不是作品"}
-    return {"source": "generic",
-            "note": "名字有歧义时查证，不按字面推断",
-            "command": f'python core/lookup.py search "{group_name}"'}
+        return {"hint": "内容是安装包，可能是软件或工具，不是作品",
+                "command": f'python core/lookup.py suggest "{group_name}" --shape installer'}
+    if kind == "code":
+        return {"hint": "内容是源码，可能是开源项目",
+                "command": f'python core/lookup.py suggest "{group_name}" --shape code'}
+    return {"hint": "名字有歧义时查证，不按字面推断",
+            "command": f'python core/lookup.py suggest "{group_name}"'}
 
 
 def _ai_question_text(suggest, shape=None, trigger=None):

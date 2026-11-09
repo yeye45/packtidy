@@ -1,242 +1,181 @@
 #!/usr/bin/env python3
 """
-lookup.py —— 拿不准时主动查，而不是猜
+lookup.py —— 查证线索，不是查询实现
 
-原则：**不确定就查证，不凭字面推断。**
+**职责边界**：
+  代码  告诉 AI「该去哪查、搜什么词」，不代替它去查
+  AI    用自己的搜索/浏览工具实际查证，然后确认判断
 
-实测教训：把 VOCALOID 归进"音乐"，因为名字里有"音源"。
-查证后发现它是歌声合成引擎 + 声库，是工具不是成品。
+为什么这样分：
+  · AI 本来就有搜索能力，代码发 HTTP 请求是重复劳动
+  · 内置数据源必然片面——VNDB 只覆盖视觉小说，
+    DLsite 只覆盖 RJ 号作品，其它内容一概查不到
+  · 硬编码"只信这两个站"是把自己的判断强加给使用者
 
-三类查询：
-  ① 软件/产品识别    这是什么东西
-  ② 游戏/影视识别    什么作品、什么类型、有没有成人内容
-  ③ 格式/文件识别    这个扩展名/文件头是什么
+所以这个文件只做三件事：
+  ① 给出可查的数据源清单（不预设只信谁）
+  ② 从组名/内容里提取可检索的关键词
+  ③ 生成具体的查询建议——去哪查、搜什么
 
-设计约束：
-  · 只查公开信息，不上传任何文件内容
-  · 查询结果带来源，可复核
-  · 查不到就说查不到，不用猜测填充
-  · 缓存结果，避免重复查询
+实际查询由 AI 完成，结果通过 --answers 回填。
 
 用法：
-    python core/lookup.py search "VOCALOID"
-    python core/lookup.py game "Seek Girl V"
-    python core/lookup.py batch questions.json --out answers.json
+    python core/lookup.py sources                 列出可查的数据源
+    python core/lookup.py suggest "某组名"         给出查询建议
+    python core/lookup.py batch questions.json    批量生成线索
 """
 import argparse
 import json
-import os
+import re
 import sys
-import time
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-HERE = Path(__file__).resolve().parent
-CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "packtidy" / "lookup"
-
-USER_AGENT = "packtidy/0.1 (local file organizer; metadata lookup only)"
-TIMEOUT = 15
-
 
 # ═══════════════════════════════════════════════════════════
-# 已知数据源
+# 可查的数据源清单
 #
-# 每个源声明：能查什么、返回什么字段、可靠度
-# 不内置"猜测"逻辑——查不到就是查不到
+# 不预设"只信这些"——这是给 AI 的参考，不是白名单。
+# 每项说明：能查什么、怎么查、局限在哪
 # ═══════════════════════════════════════════════════════════
-SOURCES = {
-    "vndb": {
-        "url": "https://api.vndb.org/kana/vn",
-        "kind": "post",
-        "about": "视觉小说数据库。能查 galgame 的标题、标签、成人分级",
-        "reliability": "high",
+SOURCE_GUIDE = {
+    "通用搜索": {
+        "how": "搜「<名称> + 开发商/发行商」或「<名称> + 是什么」",
+        "good_for": "任何拿不准的东西",
+        "limit": "结果质量取决于关键词；同名不同物很常见",
     },
-    "dlsite": {
-        "url": "https://www.dlsite.com/maniax/api/",
-        "kind": "web",
-        "about": "DLsite 公开元数据。能查 RJ 号作品的分类与年龄分级",
-        "reliability": "high",
+    "Wikipedia / 官网": {
+        "how": "搜「<名称> site:wikipedia.org」或直接看开发商官网",
+        "good_for": "软件、引擎、产品类",
+        "limit": "小众作品可能没有条目",
+    },
+    "VNDB": {
+        "how": "vndb.org 搜标题，看 tags 与 image 分级",
+        "good_for": "视觉小说 / galgame",
+        "limit": "只收视觉小说，ACT / RPG Maker / 同人小游戏查不到",
+    },
+    "DLsite": {
+        "how": "按 RJ 号直接访问，或搜作品名",
+        "good_for": "RJ 号作品（同人游戏、音声、CG 集）",
+        "limit": "需要 RJ 号或准确的作品名",
+    },
+    "Steam 商店页": {
+        "how": "store.steampowered.com 搜名称，看 Mature Content 描述",
+        "good_for": "上架 Steam 的游戏",
+        "limit": "下架或地区限制的看不到",
+    },
+    "Bangumi / 番组计划": {
+        "how": "bgm.tv 搜作品名",
+        "good_for": "动画、漫画、游戏的中文条目",
+        "limit": "偏二次元，通用软件没有",
     },
 }
 
 
-def cache_key(kind, query):
-    import hashlib
-    raw = f"{kind}::{query}".encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:16]
+def extract_search_terms(group_name, sample_files=None):
+    """从组名和样例文件里提取可检索的关键词。
 
-
-def cache_get(kind, query, max_age_days=30):
-    p = CACHE_DIR / f"{cache_key(kind, query)}.json"
-    if not p.is_file():
-        return None
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        age = time.time() - data.get("_ts", 0)
-        if age > max_age_days * 86400:
-            return None
-        return data.get("result")
-    except (OSError, ValueError):
-        return None
-
-
-def cache_put(kind, query, result):
-    try:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        p = CACHE_DIR / f"{cache_key(kind, query)}.json"
-        p.write_text(json.dumps(
-            {"_ts": time.time(), "kind": kind, "query": query,
-             "result": result}, ensure_ascii=False, indent=2),
-            encoding="utf-8")
-    except OSError:
-        pass
-
-
-# ═══════════════════════════════════════════════════════════
-# 查询：VNDB（视觉小说）
-# ═══════════════════════════════════════════════════════════
-
-def query_vndb(title, limit=3):
-    """查 VNDB。返回匹配的视觉小说及其标签。"""
-    cached = cache_get("vndb", title)
-    if cached is not None:
-        return cached
-
-    payload = {
-        "filters": ["search", "=", title],
-        "fields": "id,title,alttitle,released,tags{name,rating,category},"
-                  "image{sexual,violence}",
-        "results": limit,
-    }
-    req = urllib.request.Request(
-        SOURCES["vndb"]["url"],
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json",
-                 "User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            data = json.loads(r.read().decode("utf-8"))
-    except Exception as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
-                "source": "vndb", "query": title}
-
-    results = []
-    for vn in (data.get("results") or []):
-        # 标签按 rating 筛，只留 2 分以上的（VNDB 的 rating 是 0-3）
-        tags = [t["name"] for t in (vn.get("tags") or [])
-                if t.get("rating", 0) >= 2]
-        img = vn.get("image") or {}
-        # 成人判断：VNDB 的 image.sexual 大于 1.5 基本是成人向
-        sexual = img.get("sexual") or 0
-        results.append({
-            "id": vn.get("id"),
-            "title": vn.get("title"),
-            "altTitle": vn.get("alttitle"),
-            "released": vn.get("released"),
-            "tags": tags[:12],
-            "sexualRating": round(sexual, 2),
-            "isAdult": sexual >= 1.5,
-        })
-
-    result = {"ok": True, "source": "vndb", "query": title,
-              "results": results,
-              "found": len(results) > 0}
-    cache_put("vndb", title, result)
-    return result
-
-
-# ═══════════════════════════════════════════════════════════
-# 查询：通用搜索（兜底）
-# ═══════════════════════════════════════════════════════════
-
-def query_search(term):
-    """通用查询。返回可检索的线索，不做结论。
-
-    刻意不内置搜索引擎——信任谁由使用者决定。
-    这里只给出"该去哪里查"和"查什么词"。
+    返回按可靠度排序的候选搜索词。
     """
-    cached = cache_get("search", term)
-    if cached is not None:
-        return cached
+    terms = []
 
-    result = {
-        "ok": True,
-        "source": "suggestion",
-        "query": term,
-        "note": "未配置搜索引擎。以下是建议的查证途径，不是结论。",
-        "where": [
-            f"VNDB（视觉小说）：python core/lookup.py vndb \"{term}\"",
-            f"DLsite（RJ 号作品）：搜 RJ 号或作品名",
-            f"Wikipedia / 官网：搜 \"{term}\" + 开发商名",
-            f"Steam 商店页：搜 \"{term}\"，看 Mature Content 描述",
-        ],
-        "warn": "名字有歧义时不要按字面推断。"
-                "例：VOCALOID 叫「音源」但是工具不是成品音乐。",
-    }
-    cache_put("search", term, result)
-    return result
+    # ① RJ 号最精确
+    rj = re.search(r"RJ\d{6,8}", group_name, re.I)
+    if rj:
+        terms.append({"term": rj.group(0).upper(), "precision": "exact",
+                      "note": "RJ 号可直接定位作品"})
+
+    # ② 括号里的原文名往往是官方标题
+    for m in re.finditer(r"[（(]([^）)]{2,40})[）)]", group_name):
+        inner = m.group(1).strip()
+        if inner and not re.fullmatch(r"[\d\s\.\-]+", inner):
+            terms.append({"term": inner, "precision": "high",
+                          "note": "括号内的名称通常是原名或副标题"})
+
+    # ③ 去掉版本号/汉化标记后的主体
+    cleaned = re.sub(r"[\[【][^\]】]*[\]】]", "", group_name)
+    cleaned = re.sub(r"(汉化|中文|简体|繁体|无修|破解|绿色|整合|合集|版)",
+                     "", cleaned)
+    # 整段删除编号（RJ 号、纯数字），不要留下 "RJ" 这种残渣
+    cleaned = re.sub(r"\bRJ\s*\d{6,8}\b", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\bv?\d+[\d\.]*\b", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -_·,，")
+    if len(cleaned) >= 2 and cleaned != group_name:
+        terms.append({"term": cleaned, "precision": "medium",
+                      "note": "去掉版本/汉化标记后的主体"})
+
+    # ④ 原样
+    if group_name and len(group_name) >= 2:
+        terms.append({"term": group_name, "precision": "medium",
+                      "note": "原名"})
+
+    # 去重，保留最高精度
+    seen = {}
+    for t in terms:
+        k = t["term"].lower()
+        if k not in seen:
+            seen[k] = t
+    return sorted(seen.values(),
+                  key=lambda x: {"exact": 0, "high": 1,
+                                 "medium": 2}.get(x["precision"], 9))
 
 
-# ═══════════════════════════════════════════════════════════
-# 批量：从 AI 问题清单里挑出可查的
-# ═══════════════════════════════════════════════════════════
+def build_suggestion(group_name, shape=None, sample_files=None):
+    """给一组生成查证建议。
 
-def batch_resolve(questions, out_path=None):
-    """给一批问题补充查询结果。
-
-    只查"能查的"——组名像作品名的才查。
-    查不到的保持原样，不填猜测内容。
+    返回：搜什么、去哪查、为什么值得查。
+    不做结论。
     """
-    import re
+    terms = extract_search_terms(group_name, sample_files)
+    kind = (shape or {}).get("kind")
 
-    resolved = []
-    for q in questions:
-        group = q.get("group") or ""
-        parent = q.get("parent") or ""
-        shape = q.get("shape") or {}
-        entry = dict(q)
+    # 按内容形态推荐优先查哪里
+    if re.search(r"RJ\d{6,8}", group_name, re.I):
+        priority = ["DLsite", "通用搜索"]
+        why = "有 RJ 号，是 DLsite 作品"
+    elif kind in ("media", "image"):
+        priority = ["VNDB", "Steam 商店页", "Bangumi / 番组计划", "通用搜索"]
+        why = "内容是媒体/图像，可能是作品"
+    elif kind == "installer":
+        priority = ["Wikipedia / 官网", "通用搜索"]
+        why = "内容是安装包，可能是软件或工具而不是作品"
+    elif kind == "code":
+        priority = ["Wikipedia / 官网", "通用搜索"]
+        why = "内容是源码，可能是开源项目"
+    else:
+        priority = ["通用搜索", "Wikipedia / 官网", "Bangumi / 番组计划"]
+        why = "内容形态不明，从通用搜索开始"
 
-        # 有 RJ 号 → 建议查 DLsite
-        if re.search(r"RJ\d{6,8}", group, re.I):
-            entry["lookupHint"] = "dlsite"
-            entry["lookupKey"] = re.search(r"RJ\d{6,8}",
-                                           group, re.I).group(0).upper()
-        # 内容是媒体，名字像作品 → 查 VNDB（视觉小说）
-        elif shape.get("kind") in ("media", "image") and len(group) >= 2:
-            r = query_vndb(group)
-            if r.get("found"):
-                entry["lookup"] = r
-                entry["lookupHint"] = "vndb"
-        # 内容是安装包 → 大概率是软件，不查作品库
-        elif shape.get("kind") == "installer":
-            entry["lookupHint"] = "software"
-            entry["note"] = "内容是安装包，可能是软件/工具，不是作品"
-        else:
-            entry["lookupHint"] = "generic"
-
-        resolved.append(entry)
-
-    if out_path:
-        Path(out_path).write_text(
-            json.dumps({"resolved": resolved}, ensure_ascii=False, indent=2),
-            encoding="utf-8")
-        print(f"已写入 {out_path}")
-    return resolved
+    return {
+        "group": group_name,
+        "why": why,
+        "searchTerms": terms[:4],
+        "tryFirst": priority,
+        "guides": {name: SOURCE_GUIDE[name]
+                   for name in priority if name in SOURCE_GUIDE},
+        "reminder": "查到的是参考，不是结论。结合文件内容和目录上下文判断。",
+    }
 
 
-def cmd_vndb(args):
-    r = query_vndb(args.title, args.limit)
-    print(json.dumps(r, ensure_ascii=False, indent=2))
-    return 0 if r.get("ok") else 1
+def cmd_sources(args):
+    print("可查的数据源（参考，不是白名单）:\n")
+    for name, info in SOURCE_GUIDE.items():
+        print(f"  {name}")
+        print(f"      怎么查：{info['how']}")
+        print(f"      适合：  {info['good_for']}")
+        print(f"      局限：  {info['limit']}")
+        print()
+    print("实际查询由 AI 用自己的搜索/浏览工具完成。")
+    print("本工具只给出「去哪查、搜什么」，不代替查询。")
+    return 0
 
 
-def cmd_search(args):
-    r = query_search(args.term)
+def cmd_suggest(args):
+    shape = {"kind": args.shape} if args.shape else None
+    r = build_suggestion(args.group, shape)
     print(json.dumps(r, ensure_ascii=False, indent=2))
     return 0
 
@@ -247,24 +186,28 @@ def cmd_batch(args):
     except (OSError, ValueError) as exc:
         print(f"无法读取: {exc}", file=sys.stderr)
         return 1
+
     qs = data.get("questions") if isinstance(data, dict) else data
     if not isinstance(qs, list):
         print("需要 questions 数组", file=sys.stderr)
         return 1
-    batch_resolve(qs, args.out)
-    return 0
 
+    out = []
+    for q in qs:
+        entry = dict(q)
+        entry["lookupGuide"] = build_suggestion(
+            q.get("group", ""), q.get("shape"),
+            q.get("sampleFiles"))
+        out.append(entry)
 
-def cmd_sources(args):
-    print("可用数据源:")
-    for name, info in SOURCES.items():
-        print(f"  {name:10} {info['about']}")
-        print(f"             可靠度: {info['reliability']}")
-    print()
-    print("设计约束:")
-    print("  · 只查公开信息，不上传文件内容")
-    print("  · 结果带来源，可复核")
-    print("  · 查不到就说查不到")
+    payload = {"questions": out}
+    if args.out:
+        Path(args.out).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+        print(f"已写入 {args.out}  ({len(out)} 组)")
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -274,22 +217,18 @@ def main(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
 
-    s = sub.add_parser("vndb", help="查视觉小说数据库")
-    s.add_argument("title")
-    s.add_argument("--limit", type=int, default=3)
-    s.set_defaults(func=cmd_vndb)
+    s = sub.add_parser("sources", help="列出可查的数据源")
+    s.set_defaults(func=cmd_sources)
 
-    s = sub.add_parser("search", help="给出查证途径（不内置搜索引擎）")
-    s.add_argument("term")
-    s.set_defaults(func=cmd_search)
+    s = sub.add_parser("suggest", help="给出某组的查证建议")
+    s.add_argument("group")
+    s.add_argument("--shape", help="内容形态：installer/media/image/code")
+    s.set_defaults(func=cmd_suggest)
 
-    s = sub.add_parser("batch", help="给问题清单补查询结果")
+    s = sub.add_parser("batch", help="给问题清单批量生成查证建议")
     s.add_argument("questions")
     s.add_argument("--out")
     s.set_defaults(func=cmd_batch)
-
-    s = sub.add_parser("sources", help="列出数据源")
-    s.set_defaults(func=cmd_sources)
 
     args = p.parse_args(argv)
     return args.func(args)

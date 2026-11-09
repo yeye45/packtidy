@@ -544,60 +544,107 @@ python core/verify.py record /path out.json
 
 ---
 
-## 查询：拿不准就查，不猜
+## 查询：交给 AI，代码只给线索
 
-**不确定就查证，不凭字面推断。**
+**不确定就查证，不凭字面推断。但"查"这件事由 AI 做，不是代码做。**
 
-实测教训：VOCALOID 名字里有"音源"，归进了"音乐"。
-查证后发现它是歌声合成引擎 + 声库，是工具不是成品。
+### 为什么不该由代码查
 
-### 代码在生成问题时就附上查询线索
+```
+AI 本来就有搜索和浏览能力
+代码发 HTTP 请求是重复劳动
+
+内置数据源必然片面
+  VNDB  只覆盖视觉小说
+  DLsite 只覆盖 RJ 号作品
+  其它内容一概查不到
+
+硬编码"只信这两个站"是把判断强加给使用者
+```
+
+### 分工
+
+```
+代码  从组名/内容里提取可检索的关键词
+      给出「去哪查、搜什么」的建议
+      不预设白名单
+
+AI    用自己的搜索工具实际查
+      看到来源和内容
+      确认判断，写回 answers.json
+```
+
+### 代码给的线索长这样
 
 ```json
 {
-  "group": "RJ123456 某作",
-  "lookupHint": {"source": "dlsite", "key": "RJ123456",
-                 "note": "RJ 号作品，查 DLsite 能拿到官方分类"}
-}
-{
-  "group": "某视觉小说",
-  "lookupHint": {"source": "vndb", "key": "某视觉小说",
-                 "command": "python core/lookup.py vndb "某视觉小说""}
-}
-{
-  "group": "某软件合集",
-  "lookupHint": {"source": "software",
-                 "note": "内容是安装包，可能是软件或工具，不是作品"}
+  "group": "RJ123456 [某社团] 作品名（原题）",
+  "why": "有 RJ 号，是 DLsite 作品",
+  "searchTerms": [
+    {"term": "RJ123456", "precision": "exact",
+     "note": "RJ 号可直接定位作品"},
+    {"term": "原题", "precision": "high",
+     "note": "括号内的名称通常是原名或副标题"},
+    {"term": "作品名（原题）", "precision": "medium",
+     "note": "去掉版本/汉化标记后的主体"}
+  ],
+  "tryFirst": ["DLsite", "通用搜索"],
+  "guides": {
+    "DLsite": {"how": "按 RJ 号直接访问，或搜作品名",
+               "good_for": "RJ 号作品", "limit": "需要 RJ 号或准确名称"}
+  },
+  "reminder": "查到的是参考，不是结论。结合文件内容和目录上下文判断。"
 }
 ```
 
-**线索不是结论。** 它告诉 AI 该去哪查，不告诉它答案。
+**注意 `reminder` 那行。** 代码明确说了自己给的不是结论。
 
-### 数据源
+### 搜索词提取的优先级
 
-| 源 | 能查什么 | 可靠度 |
+```
+exact    RJ 号                  直接定位作品
+high     括号内的名称            通常是官方原名或副标题
+medium   去掉版本/汉化标记的主体   可能有歧义
+medium   原名                   兜底
+```
+
+**提取时要把 RJ 号和纯编号整段删掉**——`"RJ123456 某作"` 去数字后
+不该留下 `"RJ  某作"` 这种残渣。
+
+### AI 怎么用这些线索
+
+```
+看 why        → 知道这组大概是什么类型
+看 searchTerms → 从 precision=exact 开始搜，不行再退
+看 tryFirst    → 知道先查哪个源
+看 guides      → 知道每个源能查什么、局限在哪
+看 reminder    → 记得查到的只是参考
+
+查完 → 结合内容形态（installer/media/code）判断
+     → 写 answers.json 回填
+```
+
+### 数据源参考表
+
+| 源 | 适合 | 局限 |
 |---|---|---|
-| VNDB | 视觉小说：标题、标签、成人分级 | 高 |
-| DLsite | RJ 号作品：分类、年龄分级 | 高 |
+| 通用搜索 | 任何拿不准的 | 同名不同物很常见 |
+| Wikipedia / 官网 | 软件、引擎、产品 | 小众作品没条目 |
+| VNDB | 视觉小说 / galgame | 不收 ACT / RPG Maker / 小游戏 |
+| DLsite | RJ 号作品 | 需要 RJ 号或准确名称 |
+| Steam 商店页 | 上架 Steam 的游戏 | 下架/锁区看不到 |
+| Bangumi | 动画、漫画、游戏 | 通用软件没有 |
 
-```bash
-python core/lookup.py sources
-python core/lookup.py vndb "Fate Stay Night"
-python core/lookup.py search "某东西"        # 只给途径，不给结论
-python core/lookup.py batch questions.json --out resolved.json
-```
-
-**刻意不内置搜索引擎。** 信任谁由使用者决定——
-查询能力用来消除歧义，不是用来替代判断。
+**这只是参考，不是白名单。** AI 可以用这些之外的任何来源。
 
 ### 约束
 
 ```
-× 不上传文件内容     只查公开的元数据（标题、分类、分级）
-× 不把查询当结论     查到的是参考，仍要结合内容形态判断
-× 查不到不补猜测     返回 found: false，由 AI 说"不知道"
-✓ 结果带来源         可复核：哪来的、什么时候查的
-✓ 缓存 30 天         避免重复查询
+× 代码不发网络请求     由 AI 查，代码只给线索
+× 不预设只信哪个源     信任谁由使用者和 AI 判断
+× 查到的不当结论       结合内容形态与目录上下文
+× 查不到不补猜测       AI 说"不知道"，代码标 uncertain
+✓ 线索带 precision     告诉 AI 从哪个词开始最有效
 ```
 
 ---
