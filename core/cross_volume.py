@@ -282,8 +282,9 @@ def copy_inventory(source, target, tree, sync_directory, check):
         if record['dir']:
             after.mkdir()
             directories.append((before, after, record))
-            if file_stat(after, volume)['permissions'] != record['permissions']:
-                raise SafetyError('目标不能保留源目录权限')
+            # 这里不校验权限——mkdir 用的是父目录默认权限，
+            # 源的权限要等 copystat 才会复制过来（见下方 reversed 循环）。
+            # 之前在这里校验，导致任何权限差异都必然抛错。
         else:
             with verified_reader(before, record) as reader, open(after, 'xb') as writer:
                 if file_stat(after, volume)['permissions'] != record['permissions']:
@@ -298,6 +299,11 @@ def copy_inventory(source, target, tree, sync_directory, check):
         shutil.copystat(before, after, follow_symlinks=False)
         if os.name == 'nt':
             windows_copy_attributes(after, record)
+
+    # 目录权限在这一步之后才可能一致——现在校验
+    for before, after, record in directories:
+        if file_stat(after, volume)['permissions'] != record['permissions']:
+            raise SafetyError('目标不能保留源目录权限')
         sync_directory(after)
     sync_directory(target.parent)
 

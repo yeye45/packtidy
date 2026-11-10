@@ -20,10 +20,18 @@ from safety import SafetyError, encode_tsv, within
 @unittest.skipUnless(os.name == 'nt', 'cross-volume mutation is available on Windows NTFS only')
 class CrossVolumeCase(unittest.TestCase):
     def setUp(self):
-        source = tempfile.TemporaryDirectory(prefix='.packtidy-cross-', dir=PROJECT)
+        # 不能放系统临时目录——路径里有 AppData，命中保护名单
+        # （Journal 会因此拒绝初始化，这是对的）。
+        # 也不能直接共用一个项目内目录——CI 并发跑多个 job 会互相踩。
+        # 折中：建在项目目录下，但每次用独立子目录。
+        import uuid
+        slot = PROJECT / '.packtidy-cross' / uuid.uuid4().hex[:12]
+        slot.mkdir(parents=True)
+        source = tempfile.TemporaryDirectory(prefix='src-', dir=slot)
         self.addCleanup(source.cleanup)
         external = os.environ.get('PACKTIDY_TEST_CROSS_VOLUME_DIR')
-        target = tempfile.TemporaryDirectory(prefix='.packtidy-cross-', dir=external or PROJECT)
+        target = tempfile.TemporaryDirectory(prefix='dst-',
+                                             dir=external or slot)
         self.addCleanup(target.cleanup)
         self.root, self.target = Path(source.name), Path(target.name)
         if external:

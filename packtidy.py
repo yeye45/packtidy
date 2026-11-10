@@ -28,12 +28,25 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CORE = HERE / "core"
 
+# core/ 下的模块互相用扁平导入（import decisions / from safety import ...），
+# 所以 core/ 必须在 sys.path 上。
+# 源码目录下能跑是因为当前工作目录恰好包含它——那是隐式依赖，
+# wheel 安装到别处就断了。显式加进来。
+if str(CORE) not in sys.path:
+    sys.path.insert(0, str(CORE))
+# rules/default.json 按 HERE/"rules" 查找，安装后仍然是同目录，不用改。
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
 
 def _load(name, files):
-    """按文件名加载 core 下的模块（不要求包结构）。"""
+    """按文件名加载 core 下的模块。
+
+    不要求 core/ 是包——用 spec_from_file_location 直接加载。
+    """
     path = CORE / files
     if not path.is_file():
-        sys.exit(f"缺少 {files}，请确认在项目根目录运行")
+        sys.exit(f"缺少 {files}（在 {CORE} 下找不到）")
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
