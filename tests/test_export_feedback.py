@@ -1,5 +1,6 @@
 """反馈摘要默认不保留输入文本、私密标记、路径或原始文件名。"""
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -47,10 +48,15 @@ class TestExportFeedback(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            # 必须显式指定 UTF-8——Windows 默认 cp936，
+            # 脚本输出中文时会 UnicodeEncodeError
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
             completed = subprocess.run(
                 [sys.executable, str(SCRIPT), "--root", str(root)],
                 capture_output=True,
                 check=False,
+                env=env,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8", "replace"))
 
